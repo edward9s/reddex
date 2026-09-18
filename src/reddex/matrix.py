@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 
 import websocket
 
+from .browser_rooms import discover_visible_rooms
 from .db import init_db, upsert_message
 from .probe import fetch_targets, select_target
 
@@ -273,6 +274,14 @@ def sync_archive(
     )
     print("Matrix authorization found. Token remains in memory only.")
 
+    print("Reading the visible Reddit Chat room list from Chrome...")
+    visible_rooms = discover_visible_rooms(
+        endpoint=endpoint,
+        target_filter=target_filter,
+    )
+    visible_by_id = {room.room_id: room for room in visible_rooms}
+    print(f"Found {len(visible_by_id)} visible Reddit Chat room(s).")
+
     client = MatrixClient(auth)
     sync_filter = json.dumps(
         {
@@ -301,19 +310,43 @@ def sync_archive(
     if not isinstance(joined, dict):
         joined = {}
 
+    selected_rooms: list[tuple[str, dict[str, Any], str | None]] = []
+    missing_rooms: list[str] = []
+    for room_id, visible in visible_by_id.items():
+        room = joined.get(room_id)
+        if isinstance(room, dict):
+            selected_rooms.append((room_id, room, visible.label))
+        else:
+            missing_rooms.append(room_id)
+
+    if not selected_rooms:
+        raise RuntimeError(
+            "None of the rooms visible in Reddit Chat were present in the "
+            "authenticated Matrix /sync response. Refusing to fall back to "
+            "all joined Matrix rooms."
+        )
+
+    print(
+        f"Syncing {len(selected_rooms)} visible room(s); "
+        f"ignoring {max(len(joined) - len(selected_rooms), 0)} other "
+        "joined Matrix room(s)."
+    )
+    if missing_rooms:
+        print(
+            f"Warning: {len(missing_rooms)} visible room(s) were not present "
+            "in this Matrix /sync response and will be skipped."
+        )
+
     connection = init_db(db_path)
     room_count = 0
     message_count = 0
 
     try:
-        for room_id, room in joined.items():
-            if not isinstance(room_id, str) or not isinstance(room, dict):
-                continue
-
+        for room_id, room, visible_label in selected_rooms:
             room_count += 1
-            room_name = _room_name(room)
+            room_name = _room_name(room) or visible_label
             label = room_name or room_id
-            print(f"[{room_count}/{len(joined)}] {label}")
+            print(f"[{room_count}/{len(selected_rooms)}] {label}")
 
             timeline = room.get("timeline", {})
             if not isinstance(timeline, dict):
