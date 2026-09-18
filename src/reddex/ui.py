@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import sqlite3
 import subprocess
 import threading
 import webbrowser
@@ -13,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from .db import connect, init_db
+from .db import DatabaseError, connect, init_db
 from .search import smart_search_messages
 from .matrix import MatrixAuth, prepare_rooms, sync_prepared
 
@@ -343,7 +342,7 @@ class Handler(BaseHTTPRequestHandler):
                     }
                     for row in rows
                 ]
-            except sqlite3.Error as exc:
+            except DatabaseError as exc:
                 _json(
                     self,
                     HTTPStatus.BAD_REQUEST,
