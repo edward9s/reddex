@@ -29,8 +29,9 @@ Install reddex:
 ```sh
 git clone https://github.com/edward9s/reddex.git
 cd reddex
-python -m pip install -e .
 ```
+
+Then install the SQLCipher binding using the platform-specific instructions below.
 
 ## Start reddex
 
@@ -61,12 +62,16 @@ The UI provides:
 
 ## Android / Termux setup
 
-Install prerequisites:
+Install prerequisites and reddex:
 
 ```sh
 pkg update
 pkg install python python-pip android-tools clang openssl
+python -m pip install --no-build-isolation "sqlcipher3==0.6.2"
+python -m pip install -e .
 ```
+
+The `--no-build-isolation` flag is intentional on Termux. `sqlcipher3` 0.6.2 declares Conan as an isolated build dependency; on Android that path currently fails because Conan's generated Android profile lacks `settings.os.api_level`. Disabling build isolation makes `sqlcipher3` compile its bundled SQLCipher code against Termux's installed OpenSSL instead.
 
 Enable **Wireless debugging** in Android Developer options. Pair/connect using the addresses shown by Android:
 
@@ -299,18 +304,21 @@ No plaintext backup is intentionally retained.
 
 ### Installing SQLCipher support
 
-On Windows, macOS, and normal Linux Python installations, `sqlcipher3` currently publishes wheels for supported CPython versions, so the normal install is sufficient:
+On Windows, macOS, and normal Linux Python installations, install the SQLCipher extra:
 
 ```sh
-python -m pip install -e .
+python -m pip install -e ".[sqlcipher]"
 ```
 
-On Termux, PyPI does not publish an Android wheel for `sqlcipher3`, so pip builds the bundled SQLCipher extension locally. Install the compiler and OpenSSL first:
+On Termux, PyPI does not publish an Android wheel for `sqlcipher3`. Install it without build isolation, then install reddex:
 
 ```sh
 pkg install clang openssl
+python -m pip install --no-build-isolation "sqlcipher3==0.6.2"
 python -m pip install -e .
 ```
+
+Do not use `pip install -e ".[sqlcipher]"` on Termux for now, because that lets pip create the isolated Conan build environment that triggers the Android `settings.os.api_level` failure.
 
 reddex does not silently fall back to plaintext SQLite. If SQLCipher is unavailable, startup fails instead of opening or creating an unencrypted database.
 
@@ -343,7 +351,10 @@ It intentionally does not persist request headers, cookies, or authorization tok
 
 ## Development
 
+On desktop development environments:
+
 ```sh
+python -m pip install -e ".[sqlcipher]"
 python -m unittest discover -s tests
 ```
 
