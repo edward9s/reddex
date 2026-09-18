@@ -7,7 +7,7 @@ Archive Reddit Chat messages visible to your logged-in account and search them l
 - Reuses an already logged-in Reddit Chat browser session
 - Discovers the Reddit Chat rooms visible in that browser
 - Archives message history through Reddit's Matrix backend
-- Stores messages in SQLite
+- Stores messages in a SQLCipher-encrypted SQLite database
 - Keeps a per-message Reddit Chat URL
 - Supports incremental sync after the first complete backfill
 - Provides a local web UI
@@ -18,6 +18,7 @@ reddex does not automate Reddit login and does not store your Reddit password or
 ## Requirements
 
 - Python 3.11+
+- SQLCipher Python binding (`sqlcipher3`)
 - Chrome
 - A Reddit account already logged in to the Chrome instance exposed through Chrome DevTools Protocol (CDP)
 - Android: Termux + Android platform tools (`adb`)
@@ -64,7 +65,7 @@ Install prerequisites:
 
 ```sh
 pkg update
-pkg install python python-pip android-tools
+pkg install python python-pip android-tools clang openssl
 ```
 
 Enable **Wireless debugging** in Android Developer options. Pair/connect using the addresses shown by Android:
@@ -256,9 +257,66 @@ reddex probe
 reddex probe --list-targets
 ```
 
+## Database encryption
+
+reddex requires SQLCipher and encrypts the database at rest with a random 256-bit `db_key`.
+
+On first use, reddex creates:
+
+```text
+~/.reddex/db_key
+```
+
+The database remains at:
+
+```text
+data/reddex.db
+```
+
+The key is deliberately stored separately from the database. If someone copies only `reddex.db`, ordinary SQLite tools cannot read the database contents without the key.
+
+Do not place `db_key` next to the database or commit it to Git. Back it up somewhere secure: losing `db_key` means the encrypted database cannot be recovered.
+
+You can override the key-file location with:
+
+```sh
+REDDEX_DB_KEY_FILE=/path/to/db_key reddex
+```
+
+### Existing plaintext databases
+
+If `data/reddex.db` is an older plaintext SQLite database, reddex detects the normal `SQLite format 3` header and automatically migrates it to SQLCipher on the first open.
+
+The migration:
+
+1. checkpoints any outstanding SQLite WAL data;
+2. exports the existing database into a new SQLCipher database;
+3. verifies the encrypted database can be opened with `db_key`;
+4. replaces the plaintext database only after verification succeeds;
+5. removes plaintext WAL/SHM/journal sidecars.
+
+No plaintext backup is intentionally retained.
+
+### Installing SQLCipher support
+
+On Windows, macOS, and normal Linux Python installations, `sqlcipher3` currently publishes wheels for supported CPython versions, so the normal install is sufficient:
+
+```sh
+python -m pip install -e .
+```
+
+On Termux, PyPI does not publish an Android wheel for `sqlcipher3`, so pip builds the bundled SQLCipher extension locally. Install the compiler and OpenSSL first:
+
+```sh
+pkg install clang openssl
+python -m pip install -e .
+```
+
+reddex does not silently fall back to plaintext SQLite. If SQLCipher is unavailable, startup fails instead of opening or creating an unencrypted database.
+
 ## Database
 
-The default database is:
+The default encrypted database is:
 
 ```text
 data/reddex.db
@@ -291,7 +349,9 @@ python -m unittest discover -s tests
 
 ## Security
 
-`data/` can contain private Reddit Chat content. Do not commit or upload it.
+`data/` contains the encrypted Reddit Chat database. Do not commit or upload it.
+
+The database key is stored separately at `~/.reddex/db_key` by default. Do not commit or share that key, and keep a secure backup if the archived messages matter to you.
 
 reddex reuses an already authenticated browser session; it does not need your Reddit password or 2FA secret.
 
