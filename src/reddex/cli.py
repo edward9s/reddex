@@ -5,7 +5,8 @@ import re
 from pathlib import Path
 
 from .browser_rooms import discover_visible_rooms
-from .db import init_db, search_messages
+from .db import init_db
+from .search import smart_search_messages
 from .matrix import sync_archive
 from .probe import run_probe
 from .ui import run_ui
@@ -225,7 +226,7 @@ def main() -> None:
     if args.command == "search":
         connection = init_db(args.db)
         try:
-            rows = search_messages(connection, args.query, args.limit)
+            rows = smart_search_messages(connection, args.query, args.limit)
         finally:
             connection.close()
 
