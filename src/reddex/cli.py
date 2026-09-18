@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 from .browser_rooms import discover_visible_rooms
@@ -10,6 +11,62 @@ from .probe import run_probe
 
 DEFAULT_DB = Path("data/reddex.db")
 DEFAULT_PROBE = Path("data/probe.jsonl")
+
+
+def parse_room_selection(value: str, count: int) -> list[int]:
+    value = value.strip().lower()
+    if value in {"a", "all", "*"}:
+        return list(range(count))
+    if not value:
+        raise ValueError("No room selected.")
+
+    selected: set[int] = set()
+    for part in re.split(r"[,\\s]+", value):
+        if not part:
+            continue
+        if "-" in part:
+            start_text, end_text = part.split("-", 1)
+            if not start_text.isdigit() or not end_text.isdigit():
+                raise ValueError(f"Invalid selection: {part}")
+            start = int(start_text)
+            end = int(end_text)
+            if start > end:
+                start, end = end, start
+            numbers = range(start, end + 1)
+        else:
+            if not part.isdigit():
+                raise ValueError(f"Invalid selection: {part}")
+            numbers = [int(part)]
+
+        for number in numbers:
+            if number < 1 or number > count:
+                raise ValueError(
+                    f"Room number {number} is outside 1-{count}."
+                )
+            selected.add(number - 1)
+
+    if not selected:
+        raise ValueError("No room selected.")
+    return sorted(selected)
+
+
+def choose_rooms(rooms):
+    print()
+    for index, room in enumerate(rooms, 1):
+        label = room.label or "(unnamed)"
+        print(f"[{index}] {label}")
+        print(f"    {room.room_id}")
+    print()
+
+    while True:
+        try:
+            value = input(
+                "Select room(s) (e.g. 3, 1,3,5, 2-4; a = all): "
+            )
+            indexes = parse_room_selection(value, len(rooms))
+            return [rooms[index] for index in indexes]
+        except ValueError as exc:
+            print(exc)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -74,6 +131,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=100,
         help="Matrix history events requested per page",
+    )
+    sync_parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_rooms",
+        help="sync every visible Reddit Chat room without prompting",
     )
 
     probe_parser = subparsers.add_parser(
@@ -148,12 +211,24 @@ def main() -> None:
         return
 
     if args.command == "sync":
+        visible_rooms = discover_visible_rooms(
+            endpoint=args.endpoint,
+            target_filter=args.target_filter,
+        )
+        print(f"Found {len(visible_rooms)} visible Reddit Chat room(s).")
+        selected_rooms = (
+            visible_rooms if args.all_rooms else choose_rooms(visible_rooms)
+        )
+        selected_ids = {room.room_id for room in selected_rooms}
+
         rooms, messages = sync_archive(
             db_path=str(args.db),
             endpoint=args.endpoint,
             target_filter=args.target_filter,
             auth_timeout=args.auth_timeout,
             page_limit=args.page_limit,
+            visible_rooms=visible_rooms,
+            selected_room_ids=selected_ids,
         )
         print(f"Done: {rooms} room(s), {messages} message event(s) processed.")
         return
