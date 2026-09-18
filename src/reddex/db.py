@@ -172,12 +172,6 @@ def unlock_db_key(db_path: str | Path, password: str) -> str:
     return _validate_db_key(str(row[0]))
 
 
-def unlock_or_create_db_key(db_path: str | Path, password: str) -> str:
-    if key_vault_exists(db_path):
-        return unlock_db_key(db_path, password)
-    return create_key_vault(db_path, password)
-
-
 def connect(path: str | Path, db_key: str):
     driver = _require_sqlcipher()
     path = Path(path)
