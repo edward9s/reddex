@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from .db import DatabaseError, connect, init_db
+from .db import (
+    DatabaseError,
+    connect,
+    create_key_vault,
+    init_db,
+    key_vault_exists,
+    unlock_db_key,
+)
 from .search import smart_search_messages
 from .matrix import MatrixAuth, prepare_rooms, sync_prepared
 
@@ -32,7 +39,7 @@ h1{margin:0;font-size:1.7rem}.muted{color:#656d76}.card{background:white;border:
 button,input{font:inherit}button{border:1px solid #8c959f;border-radius:8px;background:#f6f8fa;padding:8px 12px;cursor:pointer}
 button.primary{background:#1f883d;color:white;border-color:#1f883d}button:disabled{opacity:.55;cursor:not-allowed}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.grow{flex:1;min-width:220px}
-input[type=search]{width:100%;padding:10px;border:1px solid #8c959f;border-radius:8px}
+input[type=search],input[type=password]{width:100%;padding:10px;border:1px solid #8c959f;border-radius:8px}
 .rooms{display:grid;gap:8px;margin-top:12px}.room{display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid #d8dee4;border-radius:8px}
 .room-id{font:12px ui-monospace,monospace;color:#656d76;word-break:break-all}
 .log{background:#0d1117;color:#c9d1d9;border-radius:8px;padding:12px;min-height:90px;max-height:260px;overflow:auto;white-space:pre-wrap;font:12px ui-monospace,monospace}
@@ -44,6 +51,20 @@ input[type=search]{width:100%;padding:10px;border:1px solid #8c959f;border-radiu
 <body><div class="wrap">
 <header><div><h1>reddex</h1><div class="muted">本機 Reddit Chat 封存</div></div><div id="summary" class="muted"></div></header>
 
+<section id="unlockCard" class="card">
+  <form id="unlockForm">
+    <strong id="unlockTitle">解鎖資料庫</strong>
+    <div class="row" style="margin-top:12px">
+      <input id="password" class="grow" type="password" placeholder="資料庫密碼" autocomplete="current-password">
+      <input id="confirmPassword" class="grow" type="password" placeholder="再次輸入密碼" autocomplete="new-password" hidden>
+      <button id="unlockButton" class="primary">解鎖</button>
+    </div>
+    <div id="unlockHint" class="muted" style="margin-top:10px"></div>
+    <div id="unlockError" class="bad"></div>
+  </form>
+</section>
+
+<div id="app" hidden>
 <section class="card">
   <div class="row">
     <button id="load" class="primary">載入聊天室</button>
@@ -70,10 +91,12 @@ input[type=search]{width:100%;padding:10px;border:1px solid #8c959f;border-radiu
   <div id="results" class="results"></div>
 </section>
 </div>
+</div>
 <script>
 const $ = (id) => document.getElementById(id);
 let knownRooms = [];
 let lastLogSize = -1;
+let unlocked = false;
 
 function esc(s){return String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));}
 
@@ -94,6 +117,21 @@ async function post(path, body={}){
   if(!r.ok) throw new Error(data.error || r.statusText);
   return data;
 }
+
+$("unlockForm").onsubmit = async (ev)=>{
+  ev.preventDefault();
+  $("unlockError").textContent="";
+  const password=$("password").value;
+  const confirm_password=$("confirmPassword").hidden ? "" : $("confirmPassword").value;
+  try{
+    await post("/api/unlock",{password,confirm_password});
+    $("password").value="";
+    $("confirmPassword").value="";
+    await pollOnce();
+  }catch(e){
+    $("unlockError").textContent=e.message;
+  }
+};
 
 $("load").onclick = async ()=>{
   $("error").textContent="";
@@ -123,23 +161,41 @@ $("searchForm").onsubmit = async (ev)=>{
     </div>`).join("") || '<div class="muted">沒有搜尋結果。</div>';
 };
 
+async function pollOnce(){
+  const r=await fetch("/api/state");
+  const s=await r.json();
+  unlocked=!!s.unlocked;
+  $("unlockCard").hidden=unlocked;
+  $("app").hidden=!unlocked;
+  $("summary").textContent=unlocked ? `${s.message_count} 則已封存留言` : "資料庫已鎖定";
+
+  if(!unlocked){
+    const exists=!!s.key_vault_exists;
+    $("unlockTitle").textContent=exists ? "解鎖資料庫" : "建立資料庫密碼";
+    $("unlockButton").textContent=exists ? "解鎖" : "建立並解鎖";
+    $("confirmPassword").hidden=exists;
+    $("password").autocomplete=exists ? "current-password" : "new-password";
+    $("unlockHint").textContent=exists
+      ? "密碼只用來解鎖 key vault，不會寫入磁碟。"
+      : "第一次使用：設定密碼來加密資料庫 key。";
+    return;
+  }
+
+  $("phase").textContent=s.phase || "";
+  $("error").textContent=s.error || "";
+  $("load").disabled=!!s.busy;
+  $("sync").disabled=!!s.busy || knownRooms.length===0;
+  if((s.rooms||[]).length && JSON.stringify(s.rooms)!==JSON.stringify(knownRooms)) renderRooms(s.rooms);
+  const logs=s.log||[];
+  if(logs.length!==lastLogSize){
+    $("log").textContent=logs.join("\n");
+    $("log").scrollTop=$("log").scrollHeight;
+    lastLogSize=logs.length;
+  }
+}
+
 async function poll(){
-  try{
-    const r=await fetch("/api/state");
-    const s=await r.json();
-    $("phase").textContent=s.phase || "";
-    $("error").textContent=s.error || "";
-    $("load").disabled=!!s.busy;
-    $("sync").disabled=!!s.busy || knownRooms.length===0;
-    $("summary").textContent=`${s.message_count} 則已封存留言`;
-    if((s.rooms||[]).length && JSON.stringify(s.rooms)!==JSON.stringify(knownRooms)) renderRooms(s.rooms);
-    const logs=s.log||[];
-    if(logs.length!==lastLogSize){
-      $("log").textContent=logs.join("\n");
-      $("log").scrollTop=$("log").scrollHeight;
-      lastLogSize=logs.length;
-    }
-  }catch(e){}
+  try{await pollOnce();}catch(e){}
   setTimeout(poll,1000);
 }
 poll();
@@ -168,6 +224,7 @@ class UIState:
         self.phase = "Ready"
         self.error: str | None = None
         self.log: list[str] = []
+        self.db_key: str | None = None
         self.auth: MatrixAuth | None = None
         self.rooms = []
         self.room_payloads: dict[str, dict[str, Any]] = {}
@@ -181,19 +238,40 @@ class UIState:
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
+            db_key = self.db_key
+            if db_key is None:
+                return {
+                    "unlocked": False,
+                    "key_vault_exists": key_vault_exists(self.db_path),
+                    "busy": False,
+                    "phase": "Locked",
+                    "error": None,
+                    "log": [],
+                    "rooms": [],
+                    "message_count": 0,
+                }
+
             rooms = [asdict(room) for room in self.rooms]
             data = {
+                "unlocked": True,
+                "key_vault_exists": True,
                 "busy": self.busy,
                 "phase": self.phase,
                 "error": self.error,
                 "log": list(self.log),
                 "rooms": rooms,
             }
-        data["message_count"] = self.message_count()
+        data["message_count"] = self.message_count(db_key)
         return data
 
-    def message_count(self) -> int:
-        connection = connect(self.db_path)
+    def message_count(self, db_key: str | None = None) -> int:
+        if db_key is None:
+            with self.lock:
+                db_key = self.db_key
+        if db_key is None:
+            raise RuntimeError("Database is locked.")
+
+        connection = connect(self.db_path, db_key)
         try:
             row = connection.execute(
                 "SELECT COUNT(*) AS count FROM messages"
@@ -202,7 +280,29 @@ class UIState:
         finally:
             connection.close()
 
+    def unlock(self, password: str, confirm_password: str = "") -> None:
+        if key_vault_exists(self.db_path):
+            db_key = unlock_db_key(self.db_path, password)
+        else:
+            if password != confirm_password:
+                raise RuntimeError("Database passwords do not match.")
+            db_key = create_key_vault(self.db_path, password)
+
+        connection = init_db(self.db_path, db_key)
+        connection.close()
+        with self.lock:
+            self.db_key = db_key
+            self.phase = "Ready"
+            self.error = None
+
+    def require_db_key(self) -> str:
+        with self.lock:
+            if self.db_key is None:
+                raise RuntimeError("Database is locked.")
+            return self.db_key
+
     def start_load(self) -> None:
+        self.require_db_key()
         with self.lock:
             if self.busy:
                 raise RuntimeError("Another operation is already running.")
@@ -234,6 +334,7 @@ class UIState:
                 self.busy = False
 
     def start_sync(self, room_ids: set[str]) -> None:
+        db_key = self.require_db_key()
         with self.lock:
             if self.busy:
                 raise RuntimeError("Another operation is already running.")
@@ -252,12 +353,13 @@ class UIState:
             self.phase = "Starting sync..."
         threading.Thread(
             target=self._sync_worker,
-            args=(auth, rooms, payloads, selected),
+            args=(db_key, auth, rooms, payloads, selected),
             daemon=True,
         ).start()
 
     def _sync_worker(
         self,
+        db_key: str,
         auth: MatrixAuth,
         rooms,
         payloads: dict[str, dict[str, Any]],
@@ -266,6 +368,7 @@ class UIState:
         try:
             room_count, message_count = sync_prepared(
                 db_path=str(self.db_path),
+                db_key=db_key,
                 auth=auth,
                 available_rooms=rooms,
                 room_payloads=payloads,
@@ -328,7 +431,8 @@ class Handler(BaseHTTPRequestHandler):
             if not query:
                 _json(self, HTTPStatus.BAD_REQUEST, {"error": "Missing query."})
                 return
-            connection = connect(self.state.db_path)
+            db_key = self.state.require_db_key()
+            connection = connect(self.state.db_path, db_key)
             try:
                 rows = smart_search_messages(connection, query, 100)
                 results = [
@@ -368,6 +472,17 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
+            if parsed.path == "/api/unlock":
+                password = payload.get("password", "")
+                confirm_password = payload.get("confirm_password", "")
+                if not isinstance(password, str) or not isinstance(
+                    confirm_password, str
+                ):
+                    raise RuntimeError("Invalid password.")
+                self.state.unlock(password, confirm_password)
+                _json(self, HTTPStatus.OK, {"ok": True})
+                return
+
             if parsed.path == "/api/load":
                 self.state.start_load()
                 _json(self, HTTPStatus.ACCEPTED, {"ok": True})
@@ -433,9 +548,6 @@ def run_ui(
     host: str = "127.0.0.1",
     port: int = 8787,
 ) -> None:
-    connection = init_db(db_path)
-    connection.close()
-
     state = UIState(
         db_path=Path(db_path),
         endpoint=endpoint,
