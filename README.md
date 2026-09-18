@@ -104,11 +104,13 @@ Start the local UI:
 reddex ui
 ```
 
-Then open:
+reddex automatically opens:
 
 ```text
 http://127.0.0.1:8787
 ```
+
+On Termux it prefers `termux-open-url`; if automatic opening is unavailable, the URL is still printed in the terminal.
 
 The UI provides:
 
