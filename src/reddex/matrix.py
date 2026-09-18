@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 
 import websocket
 
-from .browser_rooms import discover_visible_rooms
+from .browser_rooms import VisibleRoom, discover_visible_rooms
 from .db import init_db, upsert_message
 from .probe import fetch_targets, select_target
 
@@ -265,7 +265,25 @@ def sync_archive(
     target_filter: str = "reddit",
     auth_timeout: float = 30.0,
     page_limit: int = 100,
+    visible_rooms: list[VisibleRoom] | None = None,
+    selected_room_ids: set[str] | None = None,
 ) -> tuple[int, int]:
+    if visible_rooms is None:
+        print("Reading the visible Reddit Chat room list from Chrome...")
+        visible_rooms = discover_visible_rooms(
+            endpoint=endpoint,
+            target_filter=target_filter,
+        )
+    visible_by_id = {room.room_id: room for room in visible_rooms}
+    if selected_room_ids is not None:
+        visible_by_id = {
+            room_id: room
+            for room_id, room in visible_by_id.items()
+            if room_id in selected_room_ids
+        }
+    if not visible_by_id:
+        raise RuntimeError("No Reddit Chat rooms were selected.")
+
     print("Waiting for an authenticated Reddit Matrix request from Chrome...")
     auth = discover_matrix_auth(
         endpoint=endpoint,
@@ -273,14 +291,7 @@ def sync_archive(
         timeout=auth_timeout,
     )
     print("Matrix authorization found. Token remains in memory only.")
-
-    print("Reading the visible Reddit Chat room list from Chrome...")
-    visible_rooms = discover_visible_rooms(
-        endpoint=endpoint,
-        target_filter=target_filter,
-    )
-    visible_by_id = {room.room_id: room for room in visible_rooms}
-    print(f"Found {len(visible_by_id)} visible Reddit Chat room(s).")
+    print(f"Selected {len(visible_by_id)} Reddit Chat room(s).")
 
     client = MatrixClient(auth)
     sync_filter = json.dumps(
