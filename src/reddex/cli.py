@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .browser_rooms import discover_visible_rooms
 from .db import init_db, search_messages
 from .matrix import sync_archive
 from .probe import run_probe
@@ -31,6 +32,21 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("query")
     search_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     search_parser.add_argument("--limit", type=int, default=20)
+
+    rooms_parser = subparsers.add_parser(
+        "rooms",
+        help="list Reddit Chat rooms currently visible in the browser UI",
+    )
+    rooms_parser.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:9222",
+        help="CDP HTTP endpoint",
+    )
+    rooms_parser.add_argument(
+        "--target-filter",
+        default="reddit",
+        help="substring used to choose a Chrome tab",
+    )
 
     sync_parser = subparsers.add_parser(
         "sync",
@@ -119,6 +135,16 @@ def main() -> None:
             print(row["snippet"])
             print(row["web_url"])
             print()
+        return
+
+    if args.command == "rooms":
+        rooms = discover_visible_rooms(
+            endpoint=args.endpoint,
+            target_filter=args.target_filter,
+        )
+        for room in rooms:
+            print(f"{room.label or '-'}\t{room.room_id}")
+        print(f"{len(rooms)} visible room(s)")
         return
 
     if args.command == "sync":
