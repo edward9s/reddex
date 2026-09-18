@@ -6,6 +6,19 @@ import sqlite3
 from dataclasses import dataclass
 
 _WORD_RE = re.compile(r"[\w]+", re.UNICODE)
+_URL_RE = re.compile(
+    r"""(?ix)
+    (?:
+        https?://[^\s<>"']+
+        |
+        www\.[^\s<>"']+
+        |
+        (?:[a-z0-9-]+\.)*reddit\.com/[^\s<>"']+
+        |
+        redd\.it/[^\s<>"']+
+    )
+    """
+)
 
 
 @dataclass(frozen=True)
@@ -91,6 +104,10 @@ def _is_word_boundary(name: str, index: int) -> bool:
     return current.isdigit() != previous.isdigit()
 
 
+def _mask_urls(text: str) -> str:
+    return _URL_RE.sub(lambda match: " " * len(match.group(0)), text)
+
+
 def _words(text: str) -> list[tuple[str, int]]:
     return [(match.group(0), match.start()) for match in _WORD_RE.finditer(text)]
 
@@ -99,6 +116,8 @@ def _best_term_match(text: str, term: str) -> TextMatch | None:
     best: TextMatch | None = None
     for word, position in _words(text):
         rank = match_rank(word, term)
+        if rank == 3 and len(term) < 4:
+            continue
         if rank < 0:
             continue
         score = fuzzy_score(word, term) if rank == 3 else 0
@@ -130,10 +149,12 @@ def score_text(text: str | None, query: str) -> tuple[int, ...] | None:
     if not raw_query:
         return None
 
-    folded_text = text.casefold()
+    searchable = _mask_urls(text)
+    folded_text = searchable.casefold()
     folded_query = raw_query.casefold()
 
-    # A literal phrase/substring beats token-level fuzzy matches.
+    # A literal phrase/substring beats token-level fuzzy matches. URLs are
+    # masked before matching so random path/event IDs cannot create hits.
     direct_at = folded_text.find(folded_query)
     if direct_at >= 0:
         return (-1, direct_at, len(text) - len(raw_query))
@@ -144,7 +165,7 @@ def score_text(text: str | None, query: str) -> tuple[int, ...] | None:
 
     matches: list[TextMatch] = []
     for term in terms:
-        match = _best_term_match(text, term)
+        match = _best_term_match(searchable, term)
         if match is None:
             return None
         matches.append(match)
@@ -184,7 +205,8 @@ def score_message(row: sqlite3.Row, query: str) -> tuple[int, ...] | None:
 
 
 def _snippet(body: str, query: str, width: int = 120) -> str:
-    folded = body.casefold()
+    searchable = _mask_urls(body)
+    folded = searchable.casefold()
     needle = query.strip().casefold()
     at = folded.find(needle) if needle else -1
 
@@ -192,7 +214,7 @@ def _snippet(body: str, query: str, width: int = 120) -> str:
         terms = [match.group(0) for match in _WORD_RE.finditer(query)]
         positions: list[int] = []
         for term in terms:
-            match = _best_term_match(body, term)
+            match = _best_term_match(searchable, term)
             if match is not None:
                 positions.append(match.position)
         at = min(positions) if positions else 0
