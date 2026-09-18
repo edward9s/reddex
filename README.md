@@ -61,6 +61,7 @@ The UI provides:
 - Incremental sync with live progress
 - Archived-message count
 - Search
+- Change the database password
 - An **Open message** link for every result
 
 ## Android / Termux setup
@@ -302,11 +303,20 @@ reddex sync --all
 reddex rooms
 reddex search "query"
 reddex init
+reddex passwd
 reddex probe
 reddex probe --list-targets
 ```
 
 Commands that open the archive (`init`, `search`, and `sync`) prompt for the database password in the terminal. The password is read with a hidden terminal prompt and is not passed as a command-line argument.
+
+To change the database password from the CLI:
+
+```sh
+reddex passwd
+```
+
+It asks for the current password, the new password, and confirmation of the new password.
 
 ## Database encryption
 
@@ -340,6 +350,24 @@ If `data/reddex.db` does not exist:
 An empty password is rejected.
 
 If the database already exists, reddex asks for the password once and SQLCipher validates it immediately.
+
+### Changing the password
+
+reddex changes the password with SQLCipher's native rekey operation. There is no second key file or alternate password format.
+
+CLI:
+
+```sh
+reddex passwd
+```
+
+Web UI:
+
+1. Unlock the database.
+2. Use **變更資料庫密碼**.
+3. Enter the current password, the new password, and the new password again.
+
+After a successful change, the old password no longer opens the database. The web process immediately replaces its in-memory password with the new one so later searches and sync operations continue to work.
 
 ### Failure is explicit
 
