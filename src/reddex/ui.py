@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
+import subprocess
 import threading
+import webbrowser
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -234,7 +237,7 @@ class UIState:
             if self.busy:
                 raise RuntimeError("Another operation is already running.")
             if self.auth is None or not self.rooms:
-                raise RuntimeError("載入聊天室 first.")
+                raise RuntimeError("請先載入聊天室。")
             valid = {room.room_id for room in self.rooms}
             selected = room_ids & valid
             if not selected:
@@ -386,6 +389,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
 
+def open_ui_url(url: str) -> bool:
+    termux_open_url = shutil.which("termux-open-url")
+    if termux_open_url:
+        try:
+            subprocess.Popen(
+                [termux_open_url, url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except OSError:
+            pass
+
+    try:
+        return bool(webbrowser.open(url))
+    except Exception:
+        return False
+
+
 class Server(ThreadingHTTPServer):
     def __init__(self, address, state: UIState) -> None:
         super().__init__(address, Handler)
@@ -412,7 +434,11 @@ def run_ui(
         page_limit=page_limit,
     )
     server = Server((host, port), state)
-    print(f"reddex UI: http://{host}:{port}")
+    browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    url = f"http://{browser_host}:{port}"
+    print(f"reddex UI: {url}")
+    if not open_ui_url(url):
+        print("Could not open the browser automatically; open the URL above.")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
