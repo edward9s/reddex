@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from .db import init_db, search_messages
+from .db import connect, init_db, search_messages
 from .matrix import MatrixAuth, prepare_rooms, sync_prepared
 
 
@@ -188,7 +188,7 @@ class UIState:
         return data
 
     def message_count(self) -> int:
-        connection = init_db(self.db_path)
+        connection = connect(self.db_path)
         try:
             row = connection.execute(
                 "SELECT COUNT(*) AS count FROM messages"
@@ -323,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
             if not query:
                 _json(self, HTTPStatus.BAD_REQUEST, {"error": "Missing query."})
                 return
-            connection = init_db(self.state.db_path)
+            connection = connect(self.state.db_path)
             try:
                 rows = search_messages(connection, query, 100)
                 results = [
@@ -400,6 +400,9 @@ def run_ui(
     host: str = "127.0.0.1",
     port: int = 8787,
 ) -> None:
+    connection = init_db(db_path)
+    connection.close()
+
     state = UIState(
         db_path=Path(db_path),
         endpoint=endpoint,
