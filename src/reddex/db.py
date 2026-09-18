@@ -11,6 +11,8 @@ try:
 except ImportError:
     sqlite3 = None  # type: ignore[assignment]
 
+DatabaseError = sqlite3.DatabaseError if sqlite3 is not None else RuntimeError
+
 DEFAULT_KEY_PATH = Path.home() / ".reddex" / "db_key"
 SQLITE_HEADER = b"SQLite format 3\x00"
 
@@ -137,7 +139,7 @@ def _migrate_plaintext_database(path: Path, key: str) -> None:
     temporary = path.with_name(path.name + ".encrypted.tmp")
     temporary.unlink(missing_ok=True)
 
-    connection = driver.connect(path)
+    connection = driver.connect(str(path))
     try:
         # Fold any outstanding plaintext WAL content back into the main file
         # before exporting it.
@@ -152,7 +154,7 @@ def _migrate_plaintext_database(path: Path, key: str) -> None:
             f"ATTACH DATABASE '{temp_sql}' AS encrypted KEY '{key_sql}'"
         )
         try:
-            connection.execute("SELECT sqlcipher_export('encrypted')")
+            connection.execute("SELECT sqlcipher_export('encrypted')").fetchone()
         finally:
             connection.execute("DETACH DATABASE encrypted")
     finally:
@@ -162,7 +164,7 @@ def _migrate_plaintext_database(path: Path, key: str) -> None:
         raise RuntimeError("Failed to migrate the plaintext database to SQLCipher.")
 
     # Verify the new file can be opened before replacing the original.
-    verification = driver.connect(temporary)
+    verification = driver.connect(str(temporary))
     try:
         verification.execute(f"PRAGMA key = '{_quoted(key)}'")
         verification.execute("SELECT count(*) FROM sqlite_master").fetchone()
@@ -192,7 +194,7 @@ def connect(path: str | Path):
     if _is_plaintext_sqlite(path):
         _migrate_plaintext_database(path, key)
 
-    connection = driver.connect(path)
+    connection = driver.connect(str(path))
     connection.row_factory = driver.Row
     connection.execute(f"PRAGMA key = '{_quoted(key)}'")
 
