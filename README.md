@@ -96,7 +96,34 @@ data/reddex.db
 
 Local data under `data/` is ignored by Git.
 
-## 3. Full-text search
+## 3. Local web UI
+
+Start the local UI:
+
+```sh
+reddex ui
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8787
+```
+
+The UI provides:
+
+- Load rooms from the current authenticated Reddit Chat session
+- Select one or more rooms
+- Incremental sync with live progress
+- Local archive message count
+- Full-text search
+- An **Open message** link for each result using the stored Reddit Chat deep link
+
+When **Load rooms** is waiting for Matrix authorization, switch to the Reddit Chat tab in Chrome and change rooms once so Chrome emits an authenticated Matrix request. The token remains in reddex process memory only.
+
+The server binds to `127.0.0.1` by default. Keep that default unless you intentionally want the UI reachable from another device.
+
+## 4. Full-text search
 
 ```sh
 reddex search "DuckDB"
@@ -105,6 +132,8 @@ reddex search "DuckDB"
 Every stored message has a `web_url` built from its Matrix `room_id` and `event_id`, and search output prints that per-message Reddit Chat deep link.
 
 SQLite FTS5 is maintained by triggers, so inserts, edits, and deletes update the search index without rebuilding it.
+
+After a room has completed its first historical backfill, later syncs are incremental: reddex walks backward from the newest events only until it reaches an event already stored in SQLite.
 
 ## Debug probe
 
