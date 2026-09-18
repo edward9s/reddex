@@ -295,17 +295,16 @@ class UIState:
                 "log": list(self.log),
                 "rooms": rooms,
             }
-        data["message_count"] = self.message_count(database_password)
+        data["message_count"] = self.message_count()
         return data
 
-    def message_count(self, database_password: str | None = None) -> int:
-        if database_password is None:
+    def message_count(self) -> int:
+        with self.database_lock:
             with self.lock:
                 database_password = self.database_password
-        if database_password is None:
-            raise RuntimeError("Database is locked.")
+            if database_password is None:
+                raise RuntimeError("Database is locked.")
 
-        with self.database_lock:
             connection = connect(self.db_path, database_password)
             try:
                 row = connection.execute(
@@ -358,13 +357,12 @@ class UIState:
                     current_password,
                     new_password,
                 )
+                with self.lock:
+                    self.database_password = new_password
+                    self.phase = "Ready"
         finally:
             with self.lock:
                 self.busy = False
-
-        with self.lock:
-            self.database_password = new_password
-            self.phase = "Ready"
 
     def require_database_password(self) -> str:
         with self.lock:
@@ -502,16 +500,16 @@ class Handler(BaseHTTPRequestHandler):
             if not query:
                 _json(self, HTTPStatus.BAD_REQUEST, {"error": "Missing query."})
                 return
-            try:
-                database_password = self.state.require_database_password()
-            except RuntimeError as exc:
-                _json(
-                    self,
-                    HTTPStatus.LOCKED,
-                    {"error": str(exc)},
-                )
-                return
             with self.state.database_lock:
+                try:
+                    database_password = self.state.require_database_password()
+                except RuntimeError as exc:
+                    _json(
+                        self,
+                        HTTPStatus.LOCKED,
+                        {"error": str(exc)},
+                    )
+                    return
                 connection = connect(self.state.db_path, database_password)
                 try:
                     rows = smart_search_messages(connection, query, 100)
