@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from reddex.cli import parse_room_selection
+from reddex.cli import build_parser, parse_room_selection
 
 
 class RoomSelectionTests(unittest.TestCase):
@@ -24,6 +24,10 @@ class RoomSelectionTests(unittest.TestCase):
     def test_out_of_range(self) -> None:
         with self.assertRaises(ValueError):
             parse_room_selection("6", 5)
+
+    def test_no_subcommand_selects_default_ui_mode(self) -> None:
+        args = build_parser().parse_args([])
+        self.assertIsNone(args.command)
 
 
 if __name__ == "__main__":
