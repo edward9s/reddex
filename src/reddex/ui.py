@@ -15,7 +15,7 @@ from .matrix import MatrixAuth, prepare_rooms, sync_prepared
 
 
 INDEX_HTML = r"""<!doctype html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -38,29 +38,30 @@ input[type=search]{width:100%;padding:10px;border:1px solid #8c959f;border-radiu
 </style>
 </head>
 <body><div class="wrap">
-<header><div><h1>reddex</h1><div class="muted">Local Reddit Chat archive</div></div><div id="summary" class="muted"></div></header>
+<header><div><h1>reddex</h1><div class="muted">本機 Reddit Chat 封存</div></div><div id="summary" class="muted"></div></header>
 
 <section class="card">
   <div class="row">
-    <button id="load" class="primary">Load rooms</button>
-    <button id="all">Select all</button>
-    <button id="none">Select none</button>
-    <button id="sync" class="primary" disabled>Sync selected</button>
+    <button id="load" class="primary">載入聊天室</button>
+    <button id="all">全選</button>
+    <button id="none">全不選</button>
+    <button id="sync" class="primary" disabled>同步已選</button>
     <span id="phase" class="muted"></span>
   </div>
+  <div class="muted" style="margin-top:10px">若載入時停在等待 Matrix 授權，切到 Reddit Chat 分頁並切換一次聊天室。</div>
   <div id="rooms" class="rooms"></div>
 </section>
 
 <section class="card">
-  <strong>Progress</strong>
+  <strong>進度</strong>
   <div id="error" class="bad"></div>
   <pre id="log" class="log"></pre>
 </section>
 
 <section class="card">
   <form id="searchForm" class="row">
-    <input id="query" class="grow" type="search" placeholder="Search archived messages" autocomplete="off">
-    <button class="primary">Search</button>
+    <input id="query" class="grow" type="search" placeholder="搜尋已封存留言" autocomplete="off">
+    <button class="primary">搜尋</button>
   </form>
   <div id="results" class="results"></div>
 </section>
@@ -99,7 +100,7 @@ $("none").onclick = ()=>document.querySelectorAll(".roomCheck").forEach(x=>x.che
 $("sync").onclick = async ()=>{
   $("error").textContent="";
   const ids=[...document.querySelectorAll(".roomCheck:checked")].map(x=>x.value);
-  if(!ids.length){$("error").textContent="Select at least one room.";return;}
+  if(!ids.length){$("error").textContent="至少選擇一個聊天室。";return;}
   try{await post("/api/sync",{room_ids:ids});}catch(e){$("error").textContent=e.message;}
 };
 
@@ -114,8 +115,8 @@ $("searchForm").onsubmit = async (ev)=>{
     <div class="result">
       <div class="meta">${esc(x.room_name || x.room_id)} · ${esc(x.sender || "-")} · ${new Date(x.created_at_ms).toLocaleString()}</div>
       <div class="body">${esc(x.body)}</div>
-      <a href="${esc(x.web_url)}" target="_blank" rel="noopener">Open message</a>
-    </div>`).join("") || '<div class="muted">No results.</div>';
+      <a href="${esc(x.web_url)}" target="_blank" rel="noopener">開啟留言</a>
+    </div>`).join("") || '<div class="muted">沒有搜尋結果。</div>';
 };
 
 async function poll(){
@@ -126,7 +127,7 @@ async function poll(){
     $("error").textContent=s.error || "";
     $("load").disabled=!!s.busy;
     $("sync").disabled=!!s.busy || knownRooms.length===0;
-    $("summary").textContent=`${s.message_count} archived messages`;
+    $("summary").textContent=`${s.message_count} 則已封存留言`;
     if((s.rooms||[]).length && JSON.stringify(s.rooms)!==JSON.stringify(knownRooms)) renderRooms(s.rooms);
     const logs=s.log||[];
     if(logs.length!==lastLogSize){
@@ -233,7 +234,7 @@ class UIState:
             if self.busy:
                 raise RuntimeError("Another operation is already running.")
             if self.auth is None or not self.rooms:
-                raise RuntimeError("Load rooms first.")
+                raise RuntimeError("載入聊天室 first.")
             valid = {room.room_id for room in self.rooms}
             selected = room_ids & valid
             if not selected:
