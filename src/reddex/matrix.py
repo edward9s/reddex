@@ -361,6 +361,7 @@ def prepare_rooms(
 
 def sync_prepared(
     db_path: str,
+    db_key: str,
     auth: MatrixAuth,
     available_rooms: list[VisibleRoom],
     room_payloads: dict[str, dict[str, Any]],
@@ -380,7 +381,7 @@ def sync_prepared(
         raise RuntimeError("No Reddit Chat rooms were selected.")
 
     client = MatrixClient(auth, progress=progress)
-    connection = init_db(db_path)
+    connection = init_db(db_path, db_key)
     room_count = 0
     new_message_count = 0
 
@@ -510,6 +511,7 @@ def sync_prepared(
 
 def sync_archive(
     db_path: str,
+    db_key: str,
     endpoint: str = "http://127.0.0.1:9222",
     target_filter: str = "reddit",
     auth_timeout: float = 30.0,
@@ -531,6 +533,7 @@ def sync_archive(
 
     return sync_prepared(
         db_path=db_path,
+        db_key=db_key,
         auth=auth,
         available_rooms=available,
         room_payloads=room_payloads,
