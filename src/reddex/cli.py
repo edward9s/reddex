@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from .db import init_db, search_messages
+from .matrix import sync_archive
 from .probe import run_probe
 
 DEFAULT_DB = Path("data/reddex.db")
@@ -31,9 +32,37 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     search_parser.add_argument("--limit", type=int, default=20)
 
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="archive Reddit Chat history through the logged-in Chrome session",
+    )
+    sync_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    sync_parser.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:9222",
+        help="CDP HTTP endpoint",
+    )
+    sync_parser.add_argument(
+        "--target-filter",
+        default="reddit",
+        help="substring used to choose a Chrome tab",
+    )
+    sync_parser.add_argument(
+        "--auth-timeout",
+        type=float,
+        default=30.0,
+        help="seconds to wait for a Matrix request from Chrome",
+    )
+    sync_parser.add_argument(
+        "--page-limit",
+        type=int,
+        default=100,
+        help="Matrix history events requested per page",
+    )
+
     probe_parser = subparsers.add_parser(
         "probe",
-        help="capture Reddit-related CDP network traffic",
+        help="capture Reddit-related CDP network traffic for debugging",
     )
     probe_parser.add_argument(
         "--endpoint",
@@ -90,6 +119,17 @@ def main() -> None:
             print(row["snippet"])
             print(row["web_url"])
             print()
+        return
+
+    if args.command == "sync":
+        rooms, messages = sync_archive(
+            db_path=str(args.db),
+            endpoint=args.endpoint,
+            target_filter=args.target_filter,
+            auth_timeout=args.auth_timeout,
+            page_limit=args.page_limit,
+        )
+        print(f"Done: {rooms} room(s), {messages} message event(s) processed.")
         return
 
     if args.command == "probe":
