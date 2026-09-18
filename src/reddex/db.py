@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import json
-import sqlite3
+import os
+import secrets
 from pathlib import Path
 from typing import Any, Mapping
+
+try:
+    from sqlcipher3 import dbapi2 as sqlite3
+except ImportError:
+    sqlite3 = None  # type: ignore[assignment]
+
+DEFAULT_KEY_PATH = Path.home() / ".reddex" / "db_key"
+SQLITE_HEADER = b"SQLite format 3\x00"
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -63,25 +72,157 @@ END;
 """
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
+def _require_sqlcipher():
+    if sqlite3 is None:
+        raise RuntimeError(
+            "SQLCipher support is required. Install the sqlcipher3 package "
+            "before running reddex."
+        )
+    return sqlite3
+
+
+def key_path() -> Path:
+    override = os.environ.get("REDDEX_DB_KEY_FILE")
+    return Path(override).expanduser() if override else DEFAULT_KEY_PATH
+
+
+def load_db_key() -> str:
+    path = key_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _chmod(path.parent, 0o700)
+
+    if path.exists():
+        value = path.read_text(encoding="ascii").strip().lower()
+        if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+            raise RuntimeError(
+                f"Invalid reddex database key file: {path}. "
+                "Expected exactly 64 hexadecimal characters."
+            )
+        _chmod(path, 0o600)
+        return value
+
+    value = secrets.token_hex(32)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return load_db_key()
+
+    with os.fdopen(fd, "w", encoding="ascii") as handle:
+        handle.write(value + "\n")
+    _chmod(path, 0o600)
+    return value
+
+
+def _chmod(path: Path, mode: int) -> None:
+    try:
+        path.chmod(mode)
+    except OSError:
+        # Windows permissions are primarily ACL-based; chmod is best effort.
+        pass
+
+
+def _is_plaintext_sqlite(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size < len(SQLITE_HEADER):
+        return False
+    with path.open("rb") as handle:
+        return handle.read(len(SQLITE_HEADER)) == SQLITE_HEADER
+
+
+def _quoted(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _migrate_plaintext_database(path: Path, key: str) -> None:
+    driver = _require_sqlcipher()
+    temporary = path.with_name(path.name + ".encrypted.tmp")
+    temporary.unlink(missing_ok=True)
+
+    connection = driver.connect(path)
+    try:
+        # Fold any outstanding plaintext WAL content back into the main file
+        # before exporting it.
+        try:
+            connection.execute("PRAGMA wal_checkpoint(FULL)")
+        except driver.Error:
+            pass
+
+        temp_sql = _quoted(str(temporary))
+        key_sql = _quoted(key)
+        connection.execute(
+            f"ATTACH DATABASE '{temp_sql}' AS encrypted KEY '{key_sql}'"
+        )
+        try:
+            connection.execute("SELECT sqlcipher_export('encrypted')")
+        finally:
+            connection.execute("DETACH DATABASE encrypted")
+    finally:
+        connection.close()
+
+    if not temporary.exists() or temporary.stat().st_size == 0:
+        raise RuntimeError("Failed to migrate the plaintext database to SQLCipher.")
+
+    # Verify the new file can be opened before replacing the original.
+    verification = driver.connect(temporary)
+    try:
+        verification.execute(f"PRAGMA key = '{_quoted(key)}'")
+        verification.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    finally:
+        verification.close()
+
+    os.replace(temporary, path)
+    for suffix in ("-wal", "-shm", "-journal"):
+        Path(str(path) + suffix).unlink(missing_ok=True)
+    _restrict_database_files(path)
+
+
+def _restrict_database_files(path: Path) -> None:
+    _chmod(path, 0o600)
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = Path(str(path) + suffix)
+        if sidecar.exists():
+            _chmod(sidecar, 0o600)
+
+
+def connect(path: str | Path):
+    driver = _require_sqlcipher()
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
-    connection.row_factory = sqlite3.Row
+
+    key = load_db_key()
+    if _is_plaintext_sqlite(path):
+        _migrate_plaintext_database(path, key)
+
+    connection = driver.connect(path)
+    connection.row_factory = driver.Row
+    connection.execute(f"PRAGMA key = '{_quoted(key)}'")
+
+    # Force SQLCipher to validate the key immediately rather than waiting until
+    # the first real query.
+    try:
+        connection.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    except driver.DatabaseError as exc:
+        connection.close()
+        raise RuntimeError(
+            "Could not decrypt the reddex database. The db_key may be wrong "
+            f"or missing. Expected key file: {key_path()}"
+        ) from exc
+
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
+    _restrict_database_files(path)
     return connection
 
 
-def init_db(path: str | Path) -> sqlite3.Connection:
+def init_db(path: str | Path):
     connection = connect(path)
     connection.executescript(SCHEMA)
     connection.commit()
+    _restrict_database_files(Path(path))
     return connection
 
 
 def upsert_message(
-    connection: sqlite3.Connection,
+    connection,
     message: Mapping[str, Any],
 ) -> None:
     raw_json = message.get("raw_json")
@@ -128,10 +269,10 @@ def upsert_message(
 
 
 def search_messages(
-    connection: sqlite3.Connection,
+    connection,
     query: str,
     limit: int = 20,
-) -> list[sqlite3.Row]:
+) -> list[Any]:
     return list(
         connection.execute(
             """
@@ -151,7 +292,7 @@ def search_messages(
 
 
 def message_exists(
-    connection: sqlite3.Connection,
+    connection,
     event_id: str,
 ) -> bool:
     row = connection.execute(
@@ -162,7 +303,7 @@ def message_exists(
 
 
 def backfill_complete(
-    connection: sqlite3.Connection,
+    connection,
     room_id: str,
 ) -> bool:
     row = connection.execute(
@@ -177,7 +318,7 @@ def backfill_complete(
 
 
 def set_backfill_complete(
-    connection: sqlite3.Connection,
+    connection,
     room_id: str,
     complete: bool = True,
 ) -> None:
