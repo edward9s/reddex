@@ -141,6 +141,58 @@ class SearchTests(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_urls_do_not_participate_in_search(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reddex.db"
+            connection = init_db(path)
+            try:
+                messages = [
+                    {
+                        "event_id": "$url",
+                        "room_id": "!r:reddit.com",
+                        "room_name": "Room",
+                        "sender": "alice",
+                        "created_at_ms": 100,
+                        "body": (
+                            "look https://www.reddit.com/r/test/comments/"
+                            "abc123/tmdXYZ/"
+                        ),
+                        "web_url": "https://chat.reddit.com/room/!r:reddit.com/event/$url",
+                        "raw_json": {},
+                    },
+                    {
+                        "event_id": "$timed",
+                        "room_id": "!r:reddit.com",
+                        "room_name": "Room",
+                        "sender": "bob",
+                        "created_at_ms": 200,
+                        "body": "This was timed correctly.",
+                        "web_url": "https://chat.reddit.com/room/!r:reddit.com/event/$timed",
+                        "raw_json": {},
+                    },
+                    {
+                        "event_id": "$real",
+                        "room_id": "!r:reddit.com",
+                        "room_name": "Room",
+                        "sender": "carol",
+                        "created_at_ms": 300,
+                        "body": "TMD is written here.",
+                        "web_url": "https://chat.reddit.com/room/!r:reddit.com/event/$real",
+                        "raw_json": {},
+                    },
+                ]
+                for message in messages:
+                    upsert_message(connection, message)
+                connection.commit()
+
+                rows = smart_search_messages(connection, "tmd", 10)
+                self.assertEqual(
+                    ["$real"],
+                    [row["event_id"] for row in rows],
+                )
+            finally:
+                connection.close()
+
 
 if __name__ == "__main__":
     unittest.main()
