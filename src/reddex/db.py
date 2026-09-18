@@ -121,6 +121,26 @@ def init_db(path: str | Path, database_password: str):
     return connection
 
 
+def change_database_password(
+    path: str | Path,
+    current_password: str,
+    new_password: str,
+) -> None:
+    if not new_password:
+        raise RuntimeError("New database password must not be empty.")
+
+    connection = connect(path, current_password)
+    try:
+        connection.execute(
+            f"PRAGMA rekey = '{_sql_string(new_password)}'"
+        )
+    finally:
+        connection.close()
+
+    verification = connect(path, new_password)
+    verification.close()
+
+
 def upsert_message(
     connection,
     message: Mapping[str, Any],
