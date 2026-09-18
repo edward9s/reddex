@@ -366,11 +366,21 @@ It asks for the current password, the new password, and confirmation of the new 
 
 ## Database encryption
 
-reddex stores the archive in one encrypted file:
+reddex stores the archive in one encrypted database.
+
+By default, reddex uses:
 
 ```text
-data/reddex.db
+~/.reddex/reddex.db
 ```
+
+For an existing source checkout or development directory, if this file exists:
+
+```text
+./data/reddex.db
+```
+
+reddex uses it instead. An explicit `--db` path overrides the default selection.
 
 The password entered in the CLI or web UI is passed directly to SQLCipher as the database passphrase. SQLCipher derives the encryption key internally; reddex does not create or store a separate `db_key`, key file, or key vault.
 
@@ -388,7 +398,7 @@ The database password is never written to disk by reddex. In the web UI it remai
 
 ### First use
 
-If `data/reddex.db` does not exist:
+If the selected database does not exist:
 
 - Web UI asks for the new database password twice.
 - CLI `reddex init` or `reddex sync` asks for the new database password twice.
@@ -435,11 +445,13 @@ reddex does not silently fall back to plaintext SQLite. If SQLCipher is unavaila
 
 ## Database
 
-The default encrypted database is:
+The normal database location is:
 
 ```text
-data/reddex.db
+~/.reddex/reddex.db
 ```
+
+If `./data/reddex.db` already exists in the current working directory, reddex uses that file instead. This preserves an existing development archive without making new installations depend on the working directory.
 
 Local data under `data/` is ignored by Git.
 
@@ -471,7 +483,7 @@ python -m unittest discover -s tests
 
 ## Security
 
-`data/` contains the encrypted Reddit Chat database. Do not commit or upload it.
+The encrypted Reddit Chat database may contain private conversations. Do not commit or upload it.
 
 The database password is never written to disk by reddex. The web UI keeps it only in the running process memory after unlock so it can reopen the SQLCipher database for later operations.
 
