@@ -77,8 +77,9 @@ END;
 def _require_sqlcipher():
     if sqlite3 is None:
         raise RuntimeError(
-            "SQLCipher support is required. Install the sqlcipher3 package "
-            "before running reddex."
+            "SQLCipher support is required. Install sqlcipher3 before running "
+            "reddex. On Termux: python -m pip install --no-build-isolation "
+            "'sqlcipher3==0.6.2'."
         )
     return sqlite3
 
