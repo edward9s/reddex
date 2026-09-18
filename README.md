@@ -71,6 +71,14 @@ Run:
 reddex
 ```
 
+If the Python scripts directory is not on `PATH`, use:
+
+```sh
+python -m reddex
+```
+
+On Windows, `py -m reddex` is also available.
+
 reddex starts the local web server and automatically opens:
 
 ```text
