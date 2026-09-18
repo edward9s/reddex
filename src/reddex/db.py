@@ -84,14 +84,15 @@ def _sql_string(value: str) -> str:
 
 
 def _apply_password(connection, database_password: str) -> None:
-    if not database_password:
-        raise RuntimeError("Database password must not be empty.")
     connection.execute(
         f"PRAGMA key = '{_sql_string(database_password)}'"
     )
 
 
 def connect(path: str | Path, database_password: str):
+    if not database_password:
+        raise RuntimeError("Database password must not be empty.")
+
     driver = _require_sqlcipher()
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,7 +105,9 @@ def connect(path: str | Path, database_password: str):
         connection.execute("SELECT count(*) FROM sqlite_master").fetchone()
     except driver.DatabaseError as exc:
         connection.close()
-        raise RuntimeError("Incorrect database password or invalid database.") from exc
+        raise RuntimeError(
+            "Incorrect database password or invalid database."
+        ) from exc
 
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
