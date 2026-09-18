@@ -26,6 +26,10 @@ def unlock_cli_db_key(db_path: Path, allow_create: bool) -> str:
     if key_vault_exists(db_path):
         return unlock_db_key(db_path, getpass("Database password: "))
 
+    if db_path.exists():
+        raise RuntimeError(
+            f"Database exists but key vault does not: {db_path}"
+        )
     if not allow_create:
         raise RuntimeError("Database key vault does not exist.")
 
