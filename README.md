@@ -123,7 +123,7 @@ Then install reddex and its Python dependencies from the repository:
 ```sh
 git clone https://github.com/edward9s/reddex.git
 cd reddex
-python -m pip install -e ".[sqlcipher]"
+python -m pip install -e .
 ```
 
 That command installs the Python packages required by reddex, including:
@@ -379,11 +379,15 @@ There is no password-reset mechanism. Losing the database password makes the enc
 
 ### Installing SQLCipher support
 
-On Windows, macOS, and normal Linux Python installations, install the SQLCipher extra:
+SQLCipher is a required reddex dependency, not an optional extra.
+
+On Windows, macOS, and normal Linux Python installations:
 
 ```sh
-python -m pip install -e ".[sqlcipher]"
+python -m pip install -e .
 ```
+
+pip installs `sqlcipher3` automatically.
 
 On Termux, PyPI does not publish an Android wheel for `sqlcipher3`. Install it without build isolation, then install reddex:
 
@@ -394,7 +398,7 @@ python -m pip install --no-build-isolation "sqlcipher3==0.6.2"
 python -m pip install -e .
 ```
 
-Do not use `pip install -e ".[sqlcipher]"` on Termux for now, because that lets pip create the isolated Conan build environment that triggers the Android `settings.os.api_level` failure.
+Do not let pip reinstall `sqlcipher3` on Termux after the manual no-build-isolation install. The editable install reuses the already installed compatible version.
 
 reddex does not silently fall back to plaintext SQLite. If SQLCipher is unavailable, startup fails instead of opening or creating an unencrypted database.
 
@@ -430,7 +434,7 @@ It intentionally does not persist request headers, cookies, or authorization tok
 On desktop development environments:
 
 ```sh
-python -m pip install -e ".[sqlcipher]"
+python -m pip install -e .
 python -m unittest discover -s tests
 ```
 
