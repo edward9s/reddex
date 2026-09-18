@@ -211,26 +211,15 @@ def main() -> None:
         return
 
     if args.command == "sync":
-        visible_rooms = discover_visible_rooms(
-            endpoint=args.endpoint,
-            target_filter=args.target_filter,
-        )
-        print(f"Found {len(visible_rooms)} visible Reddit Chat room(s).")
-        selected_rooms = (
-            visible_rooms if args.all_rooms else choose_rooms(visible_rooms)
-        )
-        selected_ids = {room.room_id for room in selected_rooms}
-
         rooms, messages = sync_archive(
             db_path=str(args.db),
             endpoint=args.endpoint,
             target_filter=args.target_filter,
             auth_timeout=args.auth_timeout,
             page_limit=args.page_limit,
-            visible_rooms=visible_rooms,
-            selected_room_ids=selected_ids,
+            room_selector=None if args.all_rooms else choose_rooms,
         )
-        print(f"Done: {rooms} room(s), {messages} message event(s) processed.")
+        print(f"Done: {rooms} room(s), {messages} new message(s) archived.")
         return
 
     if args.command == "probe":
