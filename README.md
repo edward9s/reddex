@@ -133,7 +133,16 @@ reddex search "DuckDB"
 
 Every stored message has a `web_url` built from its Matrix `room_id` and `event_id`, and search output prints that per-message Reddit Chat deep link.
 
-SQLite FTS5 is maintained by triggers, so inserts, edits, and deletes update the search index without rebuilding it.
+Search is case-insensitive and uses the same matching tiers as SMM's Debug Console:
+
+1. exact word
+2. prefix
+3. substring
+4. compact ordered fuzzy subsequence
+
+The fuzzy tier requires query letters to remain in order, rejects queries shorter than three characters, limits gaps and match span, and ranks compact/early/word-boundary matches ahead of looser matches. Literal phrases are ranked ahead of token-level fuzzy matches.
+
+SQLite FTS5 is still maintained by triggers for indexed full-text data, so inserts, edits, and deletes update the index without rebuilding it.
 
 After a room has completed its first historical backfill, later syncs are incremental: reddex walks backward from the newest events only until it reaches an event already stored in SQLite.
 
