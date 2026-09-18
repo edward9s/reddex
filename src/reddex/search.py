@@ -6,16 +6,16 @@ import sqlite3
 from dataclasses import dataclass
 
 _WORD_RE = re.compile(r"[\w]+", re.UNICODE)
-_URL_RE = re.compile(
+_REDDIT_URL_RE = re.compile(
     r"""(?ix)
     (?:
-        https?://[^\s<>"']+
+        https?://(?:[a-z0-9-]+\.)*reddit\.com/[^\s<>"']*
         |
-        www\.[^\s<>"']+
+        https?://redd\.it/[^\s<>"']*
         |
-        (?:[a-z0-9-]+\.)*reddit\.com/[^\s<>"']+
+        (?:www\.)?reddit\.com/[^\s<>"']*
         |
-        redd\.it/[^\s<>"']+
+        redd\.it/[^\s<>"']*
     )
     """
 )
@@ -105,7 +105,10 @@ def _is_word_boundary(name: str, index: int) -> bool:
 
 
 def _mask_urls(text: str) -> str:
-    return _URL_RE.sub(lambda match: " " * len(match.group(0)), text)
+    return _REDDIT_URL_RE.sub(
+        lambda match: " " * len(match.group(0)),
+        text,
+    )
 
 
 def _words(text: str) -> list[tuple[str, int]]:
@@ -116,8 +119,6 @@ def _best_term_match(text: str, term: str) -> TextMatch | None:
     best: TextMatch | None = None
     for word, position in _words(text):
         rank = match_rank(word, term)
-        if rank == 3 and len(term) < 4:
-            continue
         if rank < 0:
             continue
         score = fuzzy_score(word, term) if rank == 3 else 0
@@ -188,10 +189,20 @@ def score_text(text: str | None, query: str) -> tuple[int, ...] | None:
 
 
 def score_message(row: sqlite3.Row, query: str) -> tuple[int, ...] | None:
-    # The normal search box searches message content only. Sender and room name
-    # are metadata for display and must not make unrelated messages match.
-    score = score_text(row["body"], query)
-    return None if score is None else (0, *score)
+    fields = (
+        (0, row["body"]),
+        (1, row["sender"]),
+        (2, row["room_name"]),
+    )
+    best: tuple[int, ...] | None = None
+    for field_priority, value in fields:
+        score = score_text(value, query)
+        if score is None:
+            continue
+        candidate = (field_priority, *score)
+        if best is None or candidate < best:
+            best = candidate
+    return best
 
 
 def _snippet(body: str, query: str, width: int = 120) -> str:
