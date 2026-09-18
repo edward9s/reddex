@@ -7,24 +7,22 @@ from pathlib import Path
 
 from reddex.db import (
     backfill_complete,
-    create_key_vault,
+    connect,
     init_db,
-    key_vault_path,
     message_exists,
     search_messages,
     set_backfill_complete,
-    unlock_db_key,
     upsert_message,
 )
 
-DB_KEY = "11" * 32
+PASSWORD = "correct horse battery staple"
 
 
 class DatabaseTests(unittest.TestCase):
     def test_fts_tracks_insert_update_and_delete(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reddex.db"
-            connection = init_db(path, DB_KEY)
+            connection = init_db(path, PASSWORD)
             try:
                 message = {
                     "event_id": "$event-1",
@@ -63,7 +61,7 @@ class DatabaseTests(unittest.TestCase):
     def test_incremental_sync_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reddex.db"
-            connection = init_db(path, DB_KEY)
+            connection = init_db(path, PASSWORD)
             try:
                 self.assertFalse(
                     backfill_complete(connection, "!room:reddit.com")
@@ -96,44 +94,10 @@ class DatabaseTests(unittest.TestCase):
             finally:
                 connection.close()
 
-    def test_key_vault_encrypts_random_database_key(self) -> None:
+    def test_database_is_encrypted_with_password(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reddex.db"
-
-            db_key = create_key_vault(path, "correct horse battery staple")
-            self.assertEqual(64, len(db_key))
-            self.assertEqual(
-                db_key,
-                unlock_db_key(path, "correct horse battery staple"),
-            )
-
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "Incorrect database password",
-            ):
-                unlock_db_key(path, "wrong password")
-
-            vault = key_vault_path(path)
-            self.assertTrue(vault.is_file())
-            self.assertNotEqual(
-                b"SQLite format 3\x00",
-                vault.read_bytes()[:16],
-            )
-
-            plain = plain_sqlite3.connect(vault)
-            try:
-                with self.assertRaises(plain_sqlite3.DatabaseError):
-                    plain.execute(
-                        "SELECT db_key FROM key_vault"
-                    ).fetchone()
-            finally:
-                plain.close()
-
-    def test_database_is_encrypted_with_vault_key(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "reddex.db"
-            db_key = create_key_vault(path, "password")
-            connection = init_db(path, db_key)
+            connection = init_db(path, PASSWORD)
             connection.close()
 
             self.assertNotEqual(
@@ -150,17 +114,47 @@ class DatabaseTests(unittest.TestCase):
             finally:
                 plain.close()
 
-    def test_existing_database_without_vault_fails(self) -> None:
+    def test_wrong_password_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reddex.db"
-            plain = plain_sqlite3.connect(path)
-            plain.close()
+            connection = init_db(path, PASSWORD)
+            connection.close()
 
             with self.assertRaisesRegex(
                 RuntimeError,
-                "Database already exists but key vault does not",
+                "Incorrect database password or invalid database",
             ):
-                create_key_vault(path, "password")
+                connect(path, "wrong password")
+
+    def test_plaintext_database_is_not_migrated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reddex.db"
+            plain = plain_sqlite3.connect(path)
+            try:
+                plain.execute("CREATE TABLE marker (value TEXT NOT NULL)")
+                plain.commit()
+            finally:
+                plain.close()
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Incorrect database password or invalid database",
+            ):
+                connect(path, PASSWORD)
+
+            self.assertEqual(
+                b"SQLite format 3\x00",
+                path.read_bytes()[:16],
+            )
+
+    def test_empty_password_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reddex.db"
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Database password must not be empty",
+            ):
+                init_db(path, "")
 
 
 if __name__ == "__main__":
