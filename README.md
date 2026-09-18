@@ -116,7 +116,24 @@ Chrome 136 and newer do not honor `--remote-debugging-port` against the normal d
 
 ### Windows
 
-From Command Prompt:
+From PowerShell:
+
+```powershell
+Start-Process chrome.exe -ArgumentList @(
+  "--remote-debugging-port=9222",
+  "--user-data-dir=$env:TEMP\reddex-chrome"
+)
+```
+
+Or, if Chrome is not on `PATH`:
+
+```powershell
+& "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" `
+  --remote-debugging-port=9222 `
+  "--user-data-dir=$env:TEMP\reddex-chrome"
+```
+
+From Command Prompt (`cmd.exe`), the equivalent is:
 
 ```bat
 start chrome --remote-debugging-port=9222 --user-data-dir="%TEMP%\reddex-chrome"
