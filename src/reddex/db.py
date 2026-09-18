@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import secrets
 from pathlib import Path
 from typing import Any, Mapping
@@ -12,9 +11,6 @@ except ImportError:
     sqlite3 = None  # type: ignore[assignment]
 
 DatabaseError = sqlite3.DatabaseError if sqlite3 is not None else RuntimeError
-
-DEFAULT_KEY_PATH = Path.home() / ".reddex" / "db_key"
-SQLITE_HEADER = b"SQLite format 3\x00"
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -73,6 +69,13 @@ AFTER UPDATE ON messages BEGIN
 END;
 """
 
+KEY_VAULT_SCHEMA = """
+CREATE TABLE key_vault (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    db_key  TEXT NOT NULL CHECK (length(db_key) = 64)
+);
+"""
+
 
 def _require_sqlcipher():
     if sqlite3 is None:
@@ -84,143 +87,123 @@ def _require_sqlcipher():
     return sqlite3
 
 
-def key_path() -> Path:
-    override = os.environ.get("REDDEX_DB_KEY_FILE")
-    return Path(override).expanduser() if override else DEFAULT_KEY_PATH
+def key_vault_path(db_path: str | Path) -> Path:
+    return Path(db_path).with_suffix(".keyvault")
 
 
-def load_db_key() -> str:
-    path = key_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _chmod(path.parent, 0o700)
-
-    if path.exists():
-        value = path.read_text(encoding="ascii").strip().lower()
-        if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
-            raise RuntimeError(
-                f"Invalid reddex database key file: {path}. "
-                "Expected exactly 64 hexadecimal characters."
-            )
-        _chmod(path, 0o600)
-        return value
-
-    value = secrets.token_hex(32)
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        return load_db_key()
-
-    with os.fdopen(fd, "w", encoding="ascii") as handle:
-        handle.write(value + "\n")
-    _chmod(path, 0o600)
-    return value
+def key_vault_exists(db_path: str | Path) -> bool:
+    return key_vault_path(db_path).is_file()
 
 
-def _chmod(path: Path, mode: int) -> None:
-    try:
-        path.chmod(mode)
-    except OSError:
-        # Windows permissions are primarily ACL-based; chmod is best effort.
-        pass
-
-
-def _is_plaintext_sqlite(path: Path) -> bool:
-    if not path.is_file() or path.stat().st_size < len(SQLITE_HEADER):
-        return False
-    with path.open("rb") as handle:
-        return handle.read(len(SQLITE_HEADER)) == SQLITE_HEADER
-
-
-def _quoted(value: str) -> str:
+def _sql_string(value: str) -> str:
     return value.replace("'", "''")
 
 
-def _migrate_plaintext_database(path: Path, key: str) -> None:
+def _validate_db_key(db_key: str) -> str:
+    value = db_key.lower()
+    if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+        raise RuntimeError("The key vault contains an invalid database key.")
+    return value
+
+
+def _apply_password(connection, password: str) -> None:
+    if not password:
+        raise RuntimeError("Database password must not be empty.")
+    connection.execute(f"PRAGMA key = '{_sql_string(password)}'")
+
+
+def _apply_db_key(connection, db_key: str) -> None:
+    key = _validate_db_key(db_key)
+    connection.execute(f"""PRAGMA key = "x'{key}'" """)
+
+
+def create_key_vault(db_path: str | Path, password: str) -> str:
     driver = _require_sqlcipher()
-    temporary = path.with_name(path.name + ".encrypted.tmp")
-    temporary.unlink(missing_ok=True)
+    db_path = Path(db_path)
+    vault_path = key_vault_path(db_path)
 
-    connection = driver.connect(str(path))
-    try:
-        # Fold any outstanding plaintext WAL content back into the main file
-        # before exporting it.
-        try:
-            connection.execute("PRAGMA wal_checkpoint(FULL)")
-        except driver.Error:
-            pass
-
-        temp_sql = _quoted(str(temporary))
-        key_sql = _quoted(key)
-        connection.execute(
-            f"ATTACH DATABASE '{temp_sql}' AS encrypted KEY '{key_sql}'"
+    if db_path.exists():
+        raise RuntimeError(
+            f"Database already exists but key vault does not: {vault_path}"
         )
-        try:
-            connection.execute("SELECT sqlcipher_export('encrypted')").fetchone()
-        finally:
-            connection.execute("DETACH DATABASE encrypted")
+    if vault_path.exists():
+        raise RuntimeError(f"Key vault already exists: {vault_path}")
+
+    vault_path.parent.mkdir(parents=True, exist_ok=True)
+    db_key = secrets.token_hex(32)
+    connection = driver.connect(str(vault_path))
+    try:
+        _apply_password(connection, password)
+        connection.executescript(KEY_VAULT_SCHEMA)
+        connection.execute(
+            "INSERT INTO key_vault (id, db_key) VALUES (1, ?)",
+            (db_key,),
+        )
+        connection.commit()
+    except Exception:
+        connection.close()
+        vault_path.unlink(missing_ok=True)
+        raise
+    else:
+        connection.close()
+
+    return db_key
+
+
+def unlock_db_key(db_path: str | Path, password: str) -> str:
+    driver = _require_sqlcipher()
+    vault_path = key_vault_path(db_path)
+    if not vault_path.is_file():
+        raise RuntimeError(f"Key vault does not exist: {vault_path}")
+
+    connection = driver.connect(str(vault_path))
+    try:
+        _apply_password(connection, password)
+        row = connection.execute(
+            "SELECT db_key FROM key_vault WHERE id = 1"
+        ).fetchone()
+    except driver.DatabaseError as exc:
+        raise RuntimeError("Incorrect database password.") from exc
     finally:
         connection.close()
 
-    if not temporary.exists() or temporary.stat().st_size == 0:
-        raise RuntimeError("Failed to migrate the plaintext database to SQLCipher.")
-
-    # Verify the new file can be opened before replacing the original.
-    verification = driver.connect(str(temporary))
-    try:
-        verification.execute(f"PRAGMA key = '{_quoted(key)}'")
-        verification.execute("SELECT count(*) FROM sqlite_master").fetchone()
-    finally:
-        verification.close()
-
-    os.replace(temporary, path)
-    for suffix in ("-wal", "-shm", "-journal"):
-        Path(str(path) + suffix).unlink(missing_ok=True)
-    _restrict_database_files(path)
+    if row is None:
+        raise RuntimeError("Key vault is invalid: database key is missing.")
+    return _validate_db_key(str(row[0]))
 
 
-def _restrict_database_files(path: Path) -> None:
-    _chmod(path, 0o600)
-    for suffix in ("-wal", "-shm", "-journal"):
-        sidecar = Path(str(path) + suffix)
-        if sidecar.exists():
-            _chmod(sidecar, 0o600)
+def unlock_or_create_db_key(db_path: str | Path, password: str) -> str:
+    if key_vault_exists(db_path):
+        return unlock_db_key(db_path, password)
+    return create_key_vault(db_path, password)
 
 
-def connect(path: str | Path):
+def connect(path: str | Path, db_key: str):
     driver = _require_sqlcipher()
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    key = load_db_key()
-    if _is_plaintext_sqlite(path):
-        _migrate_plaintext_database(path, key)
-
     connection = driver.connect(str(path))
     connection.row_factory = driver.Row
-    connection.execute(f"PRAGMA key = '{_quoted(key)}'")
+    _apply_db_key(connection, db_key)
 
-    # Force SQLCipher to validate the key immediately rather than waiting until
-    # the first real query.
     try:
         connection.execute("SELECT count(*) FROM sqlite_master").fetchone()
     except driver.DatabaseError as exc:
         connection.close()
         raise RuntimeError(
-            "Could not decrypt the reddex database. The db_key may be wrong "
-            f"or missing. Expected key file: {key_path()}"
+            "Could not decrypt the database with the key from its key vault."
         ) from exc
 
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
-    _restrict_database_files(path)
     return connection
 
 
-def init_db(path: str | Path):
-    connection = connect(path)
+def init_db(path: str | Path, db_key: str):
+    connection = connect(path, db_key)
     connection.executescript(SCHEMA)
     connection.commit()
-    _restrict_database_files(Path(path))
     return connection
 
 
