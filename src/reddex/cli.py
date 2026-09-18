@@ -12,8 +12,15 @@ from .matrix import sync_archive
 from .probe import run_probe
 from .ui import run_ui
 
-DEFAULT_DB = Path("data/reddex.db")
+LOCAL_DB = Path("data/reddex.db")
+HOME_DB = Path.home() / ".reddex" / "reddex.db"
 DEFAULT_PROBE = Path("data/probe.jsonl")
+
+
+def default_database_path() -> Path:
+    if LOCAL_DB.is_file():
+        return LOCAL_DB
+    return HOME_DB
 
 
 def read_database_password(db_path: Path, allow_create: bool) -> str:
@@ -99,21 +106,21 @@ def build_parser() -> argparse.ArgumentParser:
         "init",
         help="initialize the SQLite database",
     )
-    init_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    init_parser.add_argument("--db", type=Path, default=default_database_path())
 
     search_parser = subparsers.add_parser(
         "search",
         help="full-text search archived messages",
     )
     search_parser.add_argument("query")
-    search_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    search_parser.add_argument("--db", type=Path, default=default_database_path())
     search_parser.add_argument("--limit", type=int, default=20)
 
     passwd_parser = subparsers.add_parser(
         "passwd",
         help="change the SQLCipher database password",
     )
-    passwd_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    passwd_parser.add_argument("--db", type=Path, default=default_database_path())
 
     rooms_parser = subparsers.add_parser(
         "rooms",
@@ -134,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sync",
         help="archive Reddit Chat history through the logged-in Chrome session",
     )
-    sync_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    sync_parser.add_argument("--db", type=Path, default=default_database_path())
     sync_parser.add_argument(
         "--endpoint",
         default="http://127.0.0.1:9222",
@@ -202,7 +209,7 @@ def main() -> None:
     args = build_parser().parse_args()
 
     if args.command is None:
-        run_ui()
+        run_ui(db_path=default_database_path())
         return
 
     if args.command == "init":
