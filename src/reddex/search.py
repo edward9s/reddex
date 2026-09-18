@@ -188,20 +188,10 @@ def score_text(text: str | None, query: str) -> tuple[int, ...] | None:
 
 
 def score_message(row: sqlite3.Row, query: str) -> tuple[int, ...] | None:
-    fields = (
-        (0, row["body"]),
-        (1, row["sender"]),
-        (2, row["room_name"]),
-    )
-    best: tuple[int, ...] | None = None
-    for field_priority, value in fields:
-        score = score_text(value, query)
-        if score is None:
-            continue
-        candidate = (field_priority, *score)
-        if best is None or candidate < best:
-            best = candidate
-    return best
+    # The normal search box searches message content only. Sender and room name
+    # are metadata for display and must not make unrelated messages match.
+    score = score_text(row["body"], query)
+    return None if score is None else (0, *score)
 
 
 def _snippet(body: str, query: str, width: int = 120) -> str:
