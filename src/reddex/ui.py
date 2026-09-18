@@ -91,11 +91,11 @@ input[type=search],input[type=password]{width:100%;padding:10px;border:1px solid
 
 <section class="card">
   <form id="passwdForm">
-    <strong>變更Database password</strong>
+    <strong>Change database password</strong>
     <div class="row" style="margin-top:12px">
       <input id="currentPassword" class="grow" type="password" placeholder="Current password" autocomplete="off">
       <input id="newPassword" class="grow" type="password" placeholder="New password" autocomplete="off">
-      <input id="confirmNewPassword" class="grow" type="password" placeholder="再次輸入New password" autocomplete="off">
+      <input id="confirmNewPassword" class="grow" type="password" placeholder="Confirm new password" autocomplete="off">
       <button class="primary">Change password</button>
     </div>
     <div id="passwdStatus" style="margin-top:10px"></div>
@@ -159,7 +159,7 @@ $("passwdForm").onsubmit = async (ev)=>{
     $("newPassword").value="";
     $("confirmNewPassword").value="";
     status.className="good";
-    status.textContent="Database password已變更。";
+    status.textContent="Database password changed.";
   }catch(e){
     status.className="bad";
     status.textContent=e.message;
@@ -204,13 +204,13 @@ async function pollOnce(){
 
   if(!unlocked){
     const exists=!!s.database_exists;
-    $("unlockTitle").textContent=exists ? "Unlock database" : "建立Database password";
-    $("unlockButton").textContent=exists ? "解鎖" : "Create and unlock";
+    $("unlockTitle").textContent=exists ? "Unlock database" : "Create database password";
+    $("unlockButton").textContent=exists ? "Unlock" : "Create and unlock";
     $("confirmPassword").hidden=exists;
     $("password").autocomplete="off";
     $("unlockHint").textContent=exists
       ? "Enter the password to unlock the SQLCipher database."
-      : "第一次使用：設定 SQLCipher Database password。";
+      : "First use: set a password for the SQLCipher database.";
     return;
   }
 
@@ -408,7 +408,7 @@ class UIState:
             if self.busy:
                 raise RuntimeError("Another operation is already running.")
             if self.auth is None or not self.rooms:
-                raise RuntimeError("請先Load rooms。")
+                raise RuntimeError("Load rooms first.")
             valid = {room.room_id for room in self.rooms}
             selected = room_ids & valid
             if not selected:
