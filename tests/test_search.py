@@ -11,6 +11,8 @@ from reddex.search import (
     smart_search_messages,
 )
 
+PASSWORD = "test password"
+
 
 class SearchTests(unittest.TestCase):
     def test_case_insensitive_matching(self) -> None:
@@ -31,7 +33,7 @@ class SearchTests(unittest.TestCase):
     def test_search_ranks_case_insensitive_exact_word_before_fuzzy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reddex.db"
-            connection = init_db(path)
+            connection = init_db(path, PASSWORD)
             try:
                 messages = [
                     {
@@ -67,7 +69,7 @@ class SearchTests(unittest.TestCase):
     def test_partial_english_and_chinese_text_match(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reddex.db"
-            connection = init_db(path)
+            connection = init_db(path, PASSWORD)
             try:
                 messages = [
                     {
@@ -119,7 +121,7 @@ class SearchTests(unittest.TestCase):
     def test_search_supports_ordered_fuzzy_word_matching(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reddex.db"
-            connection = init_db(path)
+            connection = init_db(path, PASSWORD)
             try:
                 upsert_message(
                     connection,
@@ -144,7 +146,7 @@ class SearchTests(unittest.TestCase):
     def test_reddit_urls_do_not_participate_in_search(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reddex.db"
-            connection = init_db(path)
+            connection = init_db(path, PASSWORD)
             try:
                 messages = [
                     {
