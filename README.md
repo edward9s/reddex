@@ -69,7 +69,22 @@ curl http://127.0.0.1:9222/json
 reddex sync
 ```
 
-reddex waits for Chrome to issue an authenticated request to `matrix.redditspace.com`. If it says no authenticated Matrix request was observed, leave the command running and switch to another Reddit Chat room in Chrome, then retry if necessary.
+`reddex sync` first lists the Reddit Chat rooms visible in Chrome and asks which room numbers to archive. Examples:
+
+```text
+3
+1,3,5
+2-4
+a
+```
+
+Use `a` for all visible rooms, or skip the prompt with:
+
+```sh
+reddex sync --all
+```
+
+reddex then waits for Chrome to issue an authenticated request to `matrix.redditspace.com`. If it says no authenticated Matrix request was observed, leave the command running and switch to another Reddit Chat room in Chrome, then retry if necessary.
 
 The Matrix Authorization value is not printed or persisted by reddex.
 
@@ -87,7 +102,7 @@ Local data under `data/` is ignored by Git.
 reddex search "DuckDB"
 ```
 
-Search output includes the matching text and a per-message Reddit Chat deep link.
+Every stored message has a `web_url` built from its Matrix `room_id` and `event_id`, and search output prints that per-message Reddit Chat deep link.
 
 SQLite FTS5 is maintained by triggers, so inserts, edits, and deletes update the search index without rebuilding it.
 
