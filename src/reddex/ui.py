@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import threading
 import webbrowser
 from dataclasses import asdict
@@ -412,6 +413,15 @@ class Server(ThreadingHTTPServer):
     def __init__(self, address, state: UIState) -> None:
         super().__init__(address, Handler)
         self.state = state
+
+    def handle_error(self, request, client_address) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(
+            exc,
+            (BrokenPipeError, ConnectionAbortedError, ConnectionResetError),
+        ):
+            return
+        super().handle_error(request, client_address)
 
 
 def run_ui(
