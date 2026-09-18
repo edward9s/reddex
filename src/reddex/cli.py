@@ -6,13 +6,7 @@ from getpass import getpass
 from pathlib import Path
 
 from .browser_rooms import discover_visible_rooms
-from .db import (
-    connect,
-    create_key_vault,
-    init_db,
-    key_vault_exists,
-    unlock_db_key,
-)
+from .db import connect, init_db
 from .search import smart_search_messages
 from .matrix import sync_archive
 from .probe import run_probe
@@ -22,22 +16,20 @@ DEFAULT_DB = Path("data/reddex.db")
 DEFAULT_PROBE = Path("data/probe.jsonl")
 
 
-def unlock_cli_db_key(db_path: Path, allow_create: bool) -> str:
-    if key_vault_exists(db_path):
-        return unlock_db_key(db_path, getpass("Database password: "))
-
+def read_database_password(db_path: Path, allow_create: bool) -> str:
     if db_path.exists():
-        raise RuntimeError(
-            f"Database exists but key vault does not: {db_path}"
-        )
+        return getpass("Database password: ")
+
     if not allow_create:
-        raise RuntimeError("Database key vault does not exist.")
+        raise RuntimeError(f"Database does not exist: {db_path}")
 
     password = getpass("Create database password: ")
     confirm = getpass("Confirm database password: ")
     if password != confirm:
         raise RuntimeError("Database passwords do not match.")
-    return create_key_vault(db_path, password)
+    if not password:
+        raise RuntimeError("Database password must not be empty.")
+    return password
 
 
 def parse_room_selection(value: str, count: int) -> list[int]:
@@ -208,8 +200,8 @@ def main() -> None:
         return
 
     if args.command == "init":
-        db_key = unlock_cli_db_key(args.db, allow_create=True)
-        connection = init_db(args.db, db_key)
+        database_password = read_database_password(args.db, allow_create=True)
+        connection = init_db(args.db, database_password)
         connection.close()
         print(args.db)
         return
@@ -217,8 +209,8 @@ def main() -> None:
     if args.command == "search":
         if not args.db.is_file():
             raise RuntimeError(f"Database does not exist: {args.db}")
-        db_key = unlock_cli_db_key(args.db, allow_create=False)
-        connection = connect(args.db, db_key)
+        database_password = read_database_password(args.db, allow_create=False)
+        connection = connect(args.db, database_password)
         try:
             rows = smart_search_messages(connection, args.query, args.limit)
         finally:
@@ -246,12 +238,12 @@ def main() -> None:
         return
 
     if args.command == "sync":
-        db_key = unlock_cli_db_key(args.db, allow_create=True)
-        connection = init_db(args.db, db_key)
+        database_password = read_database_password(args.db, allow_create=True)
+        connection = init_db(args.db, database_password)
         connection.close()
         rooms, messages = sync_archive(
             db_path=str(args.db),
-            db_key=db_key,
+            database_password=database_password,
             endpoint=args.endpoint,
             target_filter=args.target_filter,
             auth_timeout=args.auth_timeout,
