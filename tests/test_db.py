@@ -155,6 +155,7 @@ class DatabaseTests(unittest.TestCase):
                 "Database password must not be empty",
             ):
                 init_db(path, "")
+            self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":
