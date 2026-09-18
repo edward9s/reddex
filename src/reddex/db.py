@@ -27,6 +27,11 @@ CREATE INDEX IF NOT EXISTS messages_room_created_idx
 CREATE INDEX IF NOT EXISTS messages_sender_idx
     ON messages(sender);
 
+CREATE TABLE IF NOT EXISTS room_sync_state (
+    room_id            TEXT PRIMARY KEY,
+    backfill_complete  INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     body,
     sender,
@@ -142,4 +147,46 @@ def search_messages(
             """,
             (query, limit),
         )
+    )
+
+
+def message_exists(
+    connection: sqlite3.Connection,
+    event_id: str,
+) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM messages WHERE event_id = ? LIMIT 1",
+        (event_id,),
+    ).fetchone()
+    return row is not None
+
+
+def backfill_complete(
+    connection: sqlite3.Connection,
+    room_id: str,
+) -> bool:
+    row = connection.execute(
+        """
+        SELECT backfill_complete
+        FROM room_sync_state
+        WHERE room_id = ?
+        """,
+        (room_id,),
+    ).fetchone()
+    return bool(row["backfill_complete"]) if row is not None else False
+
+
+def set_backfill_complete(
+    connection: sqlite3.Connection,
+    room_id: str,
+    complete: bool = True,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO room_sync_state (room_id, backfill_complete)
+        VALUES (?, ?)
+        ON CONFLICT(room_id) DO UPDATE SET
+            backfill_complete = excluded.backfill_complete
+        """,
+        (room_id, int(complete)),
     )
