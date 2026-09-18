@@ -64,6 +64,58 @@ class SearchTests(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_partial_english_and_chinese_text_match(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reddex.db"
+            connection = init_db(path)
+            try:
+                messages = [
+                    {
+                        "event_id": "$english",
+                        "room_id": "!r:reddit.com",
+                        "room_name": "Room",
+                        "sender": "alice",
+                        "created_at_ms": 100,
+                        "body": "Using ChatGPT for coding",
+                        "web_url": "https://chat.reddit.com/room/!r:reddit.com/event/$english",
+                        "raw_json": {},
+                    },
+                    {
+                        "event_id": "$chinese",
+                        "room_id": "!r:reddit.com",
+                        "room_name": "Room",
+                        "sender": "bob",
+                        "created_at_ms": 200,
+                        "body": "這是一篇關於資料庫索引的留言",
+                        "web_url": "https://chat.reddit.com/room/!r:reddit.com/event/$chinese",
+                        "raw_json": {},
+                    },
+                ]
+                for message in messages:
+                    upsert_message(connection, message)
+                connection.commit()
+
+                self.assertEqual(
+                    ["$english"],
+                    [
+                        row["event_id"]
+                        for row in smart_search_messages(
+                            connection, "chat", 10
+                        )
+                    ],
+                )
+                self.assertEqual(
+                    ["$chinese"],
+                    [
+                        row["event_id"]
+                        for row in smart_search_messages(
+                            connection, "資料庫", 10
+                        )
+                    ],
+                )
+            finally:
+                connection.close()
+
     def test_search_supports_ordered_fuzzy_word_matching(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reddex.db"
