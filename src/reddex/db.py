@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import secrets
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -69,13 +68,6 @@ AFTER UPDATE ON messages BEGIN
 END;
 """
 
-KEY_VAULT_SCHEMA = """
-CREATE TABLE key_vault (
-    id      INTEGER PRIMARY KEY CHECK (id = 1),
-    db_key  TEXT NOT NULL CHECK (length(db_key) = 64)
-);
-"""
-
 
 def _require_sqlcipher():
     if sqlite3 is None:
@@ -87,115 +79,40 @@ def _require_sqlcipher():
     return sqlite3
 
 
-def key_vault_path(db_path: str | Path) -> Path:
-    return Path(db_path).with_suffix(".keyvault")
-
-
-def key_vault_exists(db_path: str | Path) -> bool:
-    return key_vault_path(db_path).is_file()
-
-
 def _sql_string(value: str) -> str:
     return value.replace("'", "''")
 
 
-def _validate_db_key(db_key: str) -> str:
-    value = db_key.lower()
-    if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
-        raise RuntimeError("The key vault contains an invalid database key.")
-    return value
-
-
-def _apply_password(connection, password: str) -> None:
-    if not password:
+def _apply_password(connection, database_password: str) -> None:
+    if not database_password:
         raise RuntimeError("Database password must not be empty.")
-    connection.execute(f"PRAGMA key = '{_sql_string(password)}'")
+    connection.execute(
+        f"PRAGMA key = '{_sql_string(database_password)}'"
+    )
 
 
-def _apply_db_key(connection, db_key: str) -> None:
-    key = _validate_db_key(db_key)
-    connection.execute(f"""PRAGMA key = "x'{key}'" """)
-
-
-def create_key_vault(db_path: str | Path, password: str) -> str:
-    driver = _require_sqlcipher()
-    db_path = Path(db_path)
-    vault_path = key_vault_path(db_path)
-
-    if db_path.exists():
-        raise RuntimeError(
-            f"Database already exists but key vault does not: {vault_path}"
-        )
-    if vault_path.exists():
-        raise RuntimeError(f"Key vault already exists: {vault_path}")
-
-    vault_path.parent.mkdir(parents=True, exist_ok=True)
-    db_key = secrets.token_hex(32)
-    connection = driver.connect(str(vault_path))
-    try:
-        _apply_password(connection, password)
-        connection.executescript(KEY_VAULT_SCHEMA)
-        connection.execute(
-            "INSERT INTO key_vault (id, db_key) VALUES (1, ?)",
-            (db_key,),
-        )
-        connection.commit()
-    except Exception:
-        connection.close()
-        vault_path.unlink(missing_ok=True)
-        raise
-    else:
-        connection.close()
-
-    return db_key
-
-
-def unlock_db_key(db_path: str | Path, password: str) -> str:
-    driver = _require_sqlcipher()
-    vault_path = key_vault_path(db_path)
-    if not vault_path.is_file():
-        raise RuntimeError(f"Key vault does not exist: {vault_path}")
-
-    connection = driver.connect(str(vault_path))
-    try:
-        _apply_password(connection, password)
-        row = connection.execute(
-            "SELECT db_key FROM key_vault WHERE id = 1"
-        ).fetchone()
-    except driver.DatabaseError as exc:
-        raise RuntimeError("Incorrect database password.") from exc
-    finally:
-        connection.close()
-
-    if row is None:
-        raise RuntimeError("Key vault is invalid: database key is missing.")
-    return _validate_db_key(str(row[0]))
-
-
-def connect(path: str | Path, db_key: str):
+def connect(path: str | Path, database_password: str):
     driver = _require_sqlcipher()
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     connection = driver.connect(str(path))
     connection.row_factory = driver.Row
-    _apply_db_key(connection, db_key)
+    _apply_password(connection, database_password)
 
     try:
         connection.execute("SELECT count(*) FROM sqlite_master").fetchone()
     except driver.DatabaseError as exc:
         connection.close()
-        raise RuntimeError(
-            "Could not decrypt the database with the key from its key vault."
-        ) from exc
+        raise RuntimeError("Incorrect database password or invalid database.") from exc
 
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
     return connection
 
 
-def init_db(path: str | Path, db_key: str):
-    connection = connect(path, db_key)
+def init_db(path: str | Path, database_password: str):
+    connection = connect(path, database_password)
     connection.executescript(SCHEMA)
     connection.commit()
     return connection
