@@ -1,35 +1,27 @@
 # reddex
 
-Archive Reddit Chat messages visible to your logged-in account and search them locally with SQLite FTS5.
+Archive Reddit Chat messages visible to your logged-in account and search them locally.
 
-## How it works
+## What it does
 
-reddex does not automate Reddit login and does not store your Reddit password or 2FA secret.
+- Reuses an already logged-in Reddit Chat browser session
+- Discovers the Reddit Chat rooms visible in that browser
+- Archives message history through Reddit's Matrix backend
+- Stores messages in SQLite
+- Keeps a per-message Reddit Chat URL
+- Supports incremental sync after the first complete backfill
+- Provides a local web UI
+- Supports case-insensitive partial and SMM-style fuzzy search
 
-1. Log in to Reddit normally in Android Chrome.
-2. Expose that Chrome tab to Termux through ADB + Chrome DevTools Protocol (CDP).
-3. `reddex sync` observes an authenticated request to Reddit's Matrix chat server and keeps the Authorization value in memory only.
-4. It performs an initial Matrix sync to discover joined rooms.
-5. It paginates each room's history with the Matrix `/rooms/{roomId}/messages` endpoint.
-6. Text message events are written to SQLite and indexed with FTS5.
-7. Each archived message gets a deep link built from its Matrix `room_id` and `event_id`.
-
-Reddit Chat is a private implementation built on Matrix and can change. `reddex probe` remains available for debugging when that happens.
+reddex does not automate Reddit login and does not store your Reddit password or 2FA secret. The Matrix Authorization value is kept in process memory only.
 
 ## Requirements
 
-- Android with Chrome and Developer options enabled
-- Termux
 - Python 3.11+
-- Android platform tools (`adb`)
-- A Reddit account already logged in with Chrome
-
-Install Termux prerequisites:
-
-```sh
-pkg update
-pkg install python python-pip android-tools
-```
+- Chrome
+- A Reddit account already logged in to the Chrome instance exposed through Chrome DevTools Protocol (CDP)
+- Android: Termux + Android platform tools (`adb`)
+- PC: Windows, macOS, or Linux with Chrome remote debugging enabled
 
 Install reddex:
 
@@ -39,7 +31,41 @@ cd reddex
 python -m pip install -e .
 ```
 
-## 1. Connect Termux ADB to Android
+## Start reddex
+
+Run:
+
+```sh
+reddex
+```
+
+reddex starts the local web server and automatically opens:
+
+```text
+http://127.0.0.1:8787
+```
+
+On Termux it prefers `termux-open-url`; on desktop platforms it uses Python's normal browser launcher. If automatic opening fails, the URL is still printed in the terminal.
+
+The web server binds to `127.0.0.1` by default, so it is only reachable from the same device.
+
+The UI provides:
+
+- Load the current Reddit Chat room list
+- Select one or more rooms
+- Incremental sync with live progress
+- Archived-message count
+- Search
+- An **Open message** link for every result
+
+## Android / Termux setup
+
+Install prerequisites:
+
+```sh
+pkg update
+pkg install python python-pip android-tools
+```
 
 Enable **Wireless debugging** in Android Developer options. Pair/connect using the addresses shown by Android:
 
@@ -49,7 +75,7 @@ adb connect <host>:<debug-port>
 adb devices
 ```
 
-Open Chrome, make sure Reddit is logged in, and open Reddit Chat.
+Open Chrome, log in to Reddit, and open Reddit Chat.
 
 Expose Chrome's DevTools socket:
 
@@ -63,88 +89,180 @@ Confirm Chrome is reachable:
 curl http://127.0.0.1:9222/json
 ```
 
-## 2. Archive chat history
+Then run:
 
 ```sh
-reddex sync
+reddex
 ```
 
-`reddex sync` first lists the Reddit Chat rooms visible in Chrome and asks which room numbers to archive. Examples:
+If **Load rooms** waits for an authenticated Matrix request, switch to the Reddit Chat tab in Chrome and change rooms once.
+
+## PC setup
+
+reddex uses the same CDP endpoint on PC:
 
 ```text
-3
-1,3,5
-2-4
-a
+http://127.0.0.1:9222
 ```
 
-Use `a` for all visible rooms, or skip the prompt with:
+Chrome 136 and newer do not honor `--remote-debugging-port` against the normal default Chrome profile. Start a separate Chrome profile for reddex with both `--remote-debugging-port=9222` and a non-default `--user-data-dir`, then log in to Reddit in that profile.
+
+### Windows
+
+From Command Prompt:
+
+```bat
+start chrome --remote-debugging-port=9222 --user-data-dir="%TEMP%\reddex-chrome"
+```
+
+### macOS
 
 ```sh
-reddex sync --all
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.reddex-chrome"
 ```
 
-reddex then waits for Chrome to issue an authenticated request to `matrix.redditspace.com`. If it says no authenticated Matrix request was observed, leave the command running and switch to another Reddit Chat room in Chrome, then retry if necessary.
-
-The Matrix Authorization value is not printed or persisted by reddex.
-
-The database defaults to:
-
-```text
-data/reddex.db
-```
-
-Local data under `data/` is ignored by Git.
-
-## 3. Local web UI
-
-Start the local UI:
+### Linux
 
 ```sh
-reddex ui
+google-chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.reddex-chrome"
 ```
 
-reddex automatically opens:
+In that Chrome instance:
+
+1. Log in to Reddit.
+2. Open Reddit Chat.
+3. Run `reddex`.
+4. Use **Load rooms** in the automatically opened reddex page.
+
+You can verify the CDP endpoint before starting reddex:
+
+```sh
+curl http://127.0.0.1:9222/json
+```
+
+Chrome's current remote-debugging behavior is documented by Chrome for Developers:
+
+- https://developer.chrome.com/blog/remote-debugging-port
+- https://developer.chrome.com/docs/devtools/agents/get-started/configuration
+
+## Sync behavior
+
+The first successful sync of a room performs a historical backfill.
+
+After reddex reaches the end of that room's history, it records the room as fully backfilled. Later syncs are incremental:
 
 ```text
-http://127.0.0.1:8787
+newest messages
+    ↓
+archive unseen event_id values
+    ↓
+reach an event already stored in SQLite
+    ↓
+stop walking backward
 ```
 
-On Termux it prefers `termux-open-url`; if automatic opening is unavailable, the URL is still printed in the terminal.
+This avoids scanning the full room history every time.
 
-The UI provides:
+If an earlier backfill stopped because of a network/server error, reddex does not mark that room complete. A later run continues doing a full backfill until the historical end is reached, which avoids silently leaving a gap.
 
-- Load rooms from the current authenticated Reddit Chat session
-- Select one or more rooms
-- Incremental sync with live progress
-- Local archive message count
-- Full-text search
-- An **Open message** link for each result using the stored Reddit Chat deep link
+## Search
 
-When **Load rooms** is waiting for Matrix authorization, switch to the Reddit Chat tab in Chrome and change rooms once so Chrome emits an authenticated Matrix request. The token remains in reddex process memory only.
+The web UI and CLI use the same search engine.
 
-The server binds to `127.0.0.1` by default. Keep that default unless you intentionally want the UI reachable from another device.
-
-## 4. Full-text search
+CLI example:
 
 ```sh
 reddex search "DuckDB"
 ```
 
-Every stored message has a `web_url` built from its Matrix `room_id` and `event_id`, and search output prints that per-message Reddit Chat deep link.
+Search is case-insensitive and supports partial text. For example:
 
-Search is case-insensitive and uses the same matching tiers as SMM's Debug Console:
+```text
+ChatGPT  ← search: chat
+HelloWorld ← search: world
+這是一篇關於資料庫索引的留言 ← search: 資料庫
+```
+
+Literal partial text is matched directly anywhere in the message. After that, reddex uses the same matching tiers as SMM's Debug Console:
 
 1. exact word
 2. prefix
 3. substring
 4. compact ordered fuzzy subsequence
 
-The fuzzy tier requires query letters to remain in order, rejects queries shorter than three characters, limits gaps and match span, and ranks compact/early/word-boundary matches ahead of looser matches. Literal phrases are ranked ahead of token-level fuzzy matches.
+Examples of ordered fuzzy matching:
 
-SQLite FTS5 is still maintained by triggers for indexed full-text data, so inserts, edits, and deletes update the index without rebuilding it.
+```text
+goem     → Golem
+potheal  → PotionOfHealing
+atk      → attack
+```
 
-After a room has completed its first historical backfill, later syncs are incremental: reddex walks backward from the newest events only until it reaches an event already stored in SQLite.
+For fuzzy matches:
+
+- query letters must remain in order;
+- subsequence fuzzy matching requires at least 3 query characters;
+- gaps and total matched span are limited;
+- smaller gaps rank higher;
+- earlier starts and word/CamelCase boundaries rank higher;
+- overly scattered matches are rejected.
+
+Search ranking prioritizes match quality first. Equally good matches are ordered with newer messages first.
+
+SQLite FTS5 is still maintained incrementally by triggers for the archived full-text data.
+
+## Stored message fields
+
+Each archived message stores:
+
+- room ID
+- room name when available
+- Matrix event/message ID
+- sender
+- timestamp
+- body
+- per-message web URL
+- original event JSON
+
+The per-message URL is built from the Matrix room and event IDs:
+
+```text
+https://chat.reddit.com/room/{room_id}/event/{event_id}
+```
+
+## CLI commands
+
+The web UI is the default:
+
+```sh
+reddex
+```
+
+The lower-level commands remain available for debugging or scripting:
+
+```sh
+reddex sync
+reddex sync --all
+reddex rooms
+reddex search "query"
+reddex init
+reddex probe
+reddex probe --list-targets
+```
+
+## Database
+
+The default database is:
+
+```text
+data/reddex.db
+```
+
+Local data under `data/` is ignored by Git.
 
 ## Debug probe
 
@@ -163,17 +281,6 @@ data/probe.jsonl
 
 It intentionally does not persist request headers, cookies, or authorization tokens.
 
-## Stored message fields
-
-- room ID
-- room name when available
-- Matrix event/message ID
-- sender
-- timestamp
-- body
-- per-message web URL
-- original event JSON
-
 ## Development
 
 ```sh
@@ -185,3 +292,5 @@ python -m unittest discover -s tests
 `data/` can contain private Reddit Chat content. Do not commit or upload it.
 
 reddex reuses an already authenticated browser session; it does not need your Reddit password or 2FA secret.
+
+Reddit Chat is a private implementation built on Matrix and can change. `reddex probe` remains available for debugging when that happens.
