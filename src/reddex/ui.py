@@ -253,6 +253,7 @@ class UIState:
         self.auth_timeout = auth_timeout
         self.page_limit = page_limit
         self.lock = threading.Lock()
+        self.database_lock = threading.Lock()
         self.busy = False
         self.phase = "Ready"
         self.error: str | None = None
@@ -304,14 +305,15 @@ class UIState:
         if database_password is None:
             raise RuntimeError("Database is locked.")
 
-        connection = connect(self.db_path, database_password)
-        try:
-            row = connection.execute(
-                "SELECT COUNT(*) AS count FROM messages"
-            ).fetchone()
-            return int(row["count"])
-        finally:
-            connection.close()
+        with self.database_lock:
+            connection = connect(self.db_path, database_password)
+            try:
+                row = connection.execute(
+                    "SELECT COUNT(*) AS count FROM messages"
+                ).fetchone()
+                return int(row["count"])
+            finally:
+                connection.close()
 
     def unlock(self, password: str, confirm_password: str = "") -> None:
         if not password:
@@ -346,15 +348,23 @@ class UIState:
                 raise RuntimeError("Database is locked.")
             if current_password != self.database_password:
                 raise RuntimeError("Incorrect current database password.")
+            self.busy = True
+            self.phase = "Changing database password..."
 
-        change_database_password(
-            self.db_path,
-            current_password,
-            new_password,
-        )
+        try:
+            with self.database_lock:
+                change_database_password(
+                    self.db_path,
+                    current_password,
+                    new_password,
+                )
+        finally:
+            with self.lock:
+                self.busy = False
 
         with self.lock:
             self.database_password = new_password
+            self.phase = "Ready"
 
     def require_database_password(self) -> str:
         with self.lock:
@@ -501,30 +511,31 @@ class Handler(BaseHTTPRequestHandler):
                     {"error": str(exc)},
                 )
                 return
-            connection = connect(self.state.db_path, database_password)
-            try:
-                rows = smart_search_messages(connection, query, 100)
-                results = [
-                    {
-                        "event_id": row["event_id"],
-                        "room_id": row["room_id"],
-                        "room_name": row["room_name"],
-                        "sender": row["sender"],
-                        "created_at_ms": row["created_at_ms"],
-                        "body": row["body"],
-                        "web_url": row["web_url"],
-                    }
-                    for row in rows
-                ]
-            except DatabaseError as exc:
-                _json(
-                    self,
-                    HTTPStatus.BAD_REQUEST,
-                    {"error": f"Search error: {exc}"},
-                )
-                return
-            finally:
-                connection.close()
+            with self.state.database_lock:
+                connection = connect(self.state.db_path, database_password)
+                try:
+                    rows = smart_search_messages(connection, query, 100)
+                    results = [
+                        {
+                            "event_id": row["event_id"],
+                            "room_id": row["room_id"],
+                            "room_name": row["room_name"],
+                            "sender": row["sender"],
+                            "created_at_ms": row["created_at_ms"],
+                            "body": row["body"],
+                            "web_url": row["web_url"],
+                        }
+                        for row in rows
+                    ]
+                except DatabaseError as exc:
+                    _json(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {"error": f"Search error: {exc}"},
+                    )
+                    return
+                finally:
+                    connection.close()
             _json(self, HTTPStatus.OK, {"results": results})
             return
 
