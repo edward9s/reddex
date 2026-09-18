@@ -23,6 +23,7 @@ class UITests(unittest.TestCase):
         self.assertIn("同步已選", INDEX_HTML)
         self.assertIn("搜尋已封存留言", INDEX_HTML)
         self.assertIn("開啟留言", INDEX_HTML)
+        self.assertIn("變更資料庫密碼", INDEX_HTML)
 
     def test_state_starts_locked_and_unlocks_with_password(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -53,6 +54,53 @@ class UITests(unittest.TestCase):
                 state.unlock("one", "two")
 
             self.assertFalse(path.exists())
+
+    def test_change_password_updates_active_password(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reddex.db"
+            state = make_state(path)
+            state.unlock("password", "password")
+
+            state.change_password(
+                "password",
+                "new password",
+                "new password",
+            )
+
+            self.assertEqual(
+                "new password",
+                state.require_database_password(),
+            )
+
+            other = make_state(path)
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Incorrect database password or invalid database",
+            ):
+                other.unlock("password")
+            other.unlock("new password")
+            self.assertTrue(other.snapshot()["unlocked"])
+
+    def test_change_password_rejects_wrong_current_password(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reddex.db"
+            state = make_state(path)
+            state.unlock("password", "password")
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Incorrect current database password",
+            ):
+                state.change_password(
+                    "wrong",
+                    "new password",
+                    "new password",
+                )
+
+            self.assertEqual(
+                "password",
+                state.require_database_password(),
+            )
 
     def test_existing_database_requires_correct_password(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
