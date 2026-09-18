@@ -106,6 +106,29 @@ If **Load rooms** waits for an authenticated Matrix request, switch to the Reddi
 
 ## PC setup
 
+### PC prerequisites
+
+Install these first:
+
+- Python 3.11+
+- Git
+- Google Chrome
+
+Then install reddex and its Python dependencies from the repository:
+
+```sh
+git clone https://github.com/edward9s/reddex.git
+cd reddex
+python -m pip install -e ".[sqlcipher]"
+```
+
+That command installs the Python packages required by reddex, including:
+
+- `websocket-client`
+- `sqlcipher3`
+
+On supported Windows, macOS, and normal Linux CPython builds, `sqlcipher3` is normally installed from a prebuilt wheel, so no C compiler or separate SQLCipher system package is required.
+
 reddex uses the same CDP endpoint on PC:
 
 ```text
