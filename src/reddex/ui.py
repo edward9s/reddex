@@ -13,14 +13,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from .db import (
-    DatabaseError,
-    connect,
-    create_key_vault,
-    init_db,
-    key_vault_exists,
-    unlock_db_key,
-)
+from .db import DatabaseError, connect, init_db
 from .search import smart_search_messages
 from .matrix import MatrixAuth, prepare_rooms, sync_prepared
 
@@ -170,14 +163,14 @@ async function pollOnce(){
   $("summary").textContent=unlocked ? `${s.message_count} 則已封存留言` : "資料庫已鎖定";
 
   if(!unlocked){
-    const exists=!!s.key_vault_exists;
+    const exists=!!s.database_exists;
     $("unlockTitle").textContent=exists ? "解鎖資料庫" : "建立資料庫密碼";
     $("unlockButton").textContent=exists ? "解鎖" : "建立並解鎖";
     $("confirmPassword").hidden=exists;
     $("password").autocomplete="off";
     $("unlockHint").textContent=exists
-      ? "密碼只用來解鎖 key vault，不會寫入磁碟。"
-      : "第一次使用：設定密碼來加密資料庫 key。";
+      ? "輸入密碼以解鎖 SQLCipher 資料庫。"
+      : "第一次使用：設定 SQLCipher 資料庫密碼。";
     return;
   }
 
@@ -224,7 +217,7 @@ class UIState:
         self.phase = "Ready"
         self.error: str | None = None
         self.log: list[str] = []
-        self.db_key: str | None = None
+        self.database_password: str | None = None
         self.auth: MatrixAuth | None = None
         self.rooms = []
         self.room_payloads: dict[str, dict[str, Any]] = {}
@@ -238,11 +231,11 @@ class UIState:
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
-            db_key = self.db_key
-            if db_key is None:
+            database_password = self.database_password
+            if database_password is None:
                 return {
                     "unlocked": False,
-                    "key_vault_exists": key_vault_exists(self.db_path),
+                    "database_exists": self.db_path.is_file(),
                     "busy": False,
                     "phase": "Locked",
                     "error": None,
@@ -254,24 +247,24 @@ class UIState:
             rooms = [asdict(room) for room in self.rooms]
             data = {
                 "unlocked": True,
-                "key_vault_exists": True,
+                "database_exists": True,
                 "busy": self.busy,
                 "phase": self.phase,
                 "error": self.error,
                 "log": list(self.log),
                 "rooms": rooms,
             }
-        data["message_count"] = self.message_count(db_key)
+        data["message_count"] = self.message_count(database_password)
         return data
 
-    def message_count(self, db_key: str | None = None) -> int:
-        if db_key is None:
+    def message_count(self, database_password: str | None = None) -> int:
+        if database_password is None:
             with self.lock:
-                db_key = self.db_key
-        if db_key is None:
+                database_password = self.database_password
+        if database_password is None:
             raise RuntimeError("Database is locked.")
 
-        connection = connect(self.db_path, db_key)
+        connection = connect(self.db_path, database_password)
         try:
             row = connection.execute(
                 "SELECT COUNT(*) AS count FROM messages"
@@ -281,28 +274,26 @@ class UIState:
             connection.close()
 
     def unlock(self, password: str, confirm_password: str = "") -> None:
-        if key_vault_exists(self.db_path):
-            db_key = unlock_db_key(self.db_path, password)
-        else:
-            if password != confirm_password:
-                raise RuntimeError("Database passwords do not match.")
-            db_key = create_key_vault(self.db_path, password)
+        if not password:
+            raise RuntimeError("Database password must not be empty.")
+        if not self.db_path.exists() and password != confirm_password:
+            raise RuntimeError("Database passwords do not match.")
 
-        connection = init_db(self.db_path, db_key)
+        connection = init_db(self.db_path, password)
         connection.close()
         with self.lock:
-            self.db_key = db_key
+            self.database_password = password
             self.phase = "Ready"
             self.error = None
 
-    def require_db_key(self) -> str:
+    def require_database_password(self) -> str:
         with self.lock:
-            if self.db_key is None:
+            if self.database_password is None:
                 raise RuntimeError("Database is locked.")
-            return self.db_key
+            return self.database_password
 
     def start_load(self) -> None:
-        self.require_db_key()
+        self.require_database_password()
         with self.lock:
             if self.busy:
                 raise RuntimeError("Another operation is already running.")
@@ -334,7 +325,7 @@ class UIState:
                 self.busy = False
 
     def start_sync(self, room_ids: set[str]) -> None:
-        db_key = self.require_db_key()
+        database_password = self.require_database_password()
         with self.lock:
             if self.busy:
                 raise RuntimeError("Another operation is already running.")
@@ -353,13 +344,13 @@ class UIState:
             self.phase = "Starting sync..."
         threading.Thread(
             target=self._sync_worker,
-            args=(db_key, auth, rooms, payloads, selected),
+            args=(database_password, auth, rooms, payloads, selected),
             daemon=True,
         ).start()
 
     def _sync_worker(
         self,
-        db_key: str,
+        database_password: str,
         auth: MatrixAuth,
         rooms,
         payloads: dict[str, dict[str, Any]],
@@ -368,7 +359,7 @@ class UIState:
         try:
             room_count, message_count = sync_prepared(
                 db_path=str(self.db_path),
-                db_key=db_key,
+                database_password=database_password,
                 auth=auth,
                 available_rooms=rooms,
                 room_payloads=payloads,
@@ -432,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
                 _json(self, HTTPStatus.BAD_REQUEST, {"error": "Missing query."})
                 return
             try:
-                db_key = self.state.require_db_key()
+                database_password = self.state.require_database_password()
             except RuntimeError as exc:
                 _json(
                     self,
@@ -440,7 +431,7 @@ class Handler(BaseHTTPRequestHandler):
                     {"error": str(exc)},
                 )
                 return
-            connection = connect(self.state.db_path, db_key)
+            connection = connect(self.state.db_path, database_password)
             try:
                 rows = smart_search_messages(connection, query, 100)
                 results = [
