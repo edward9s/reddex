@@ -141,14 +141,14 @@ class SearchTests(unittest.TestCase):
             finally:
                 connection.close()
 
-    def test_urls_do_not_participate_in_search(self) -> None:
+    def test_reddit_urls_do_not_participate_in_search(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "reddex.db"
             connection = init_db(path)
             try:
                 messages = [
                     {
-                        "event_id": "$url",
+                        "event_id": "$reddit",
                         "room_id": "!r:reddit.com",
                         "room_name": "Room",
                         "sender": "alice",
@@ -157,17 +157,17 @@ class SearchTests(unittest.TestCase):
                             "look https://www.reddit.com/r/test/comments/"
                             "abc123/tmdXYZ/"
                         ),
-                        "web_url": "https://chat.reddit.com/room/!r:reddit.com/event/$url",
+                        "web_url": "https://chat.reddit.com/room/!r:reddit.com/event/$reddit",
                         "raw_json": {},
                     },
                     {
-                        "event_id": "$timed",
+                        "event_id": "$generic",
                         "room_id": "!r:reddit.com",
                         "room_name": "Room",
                         "sender": "bob",
                         "created_at_ms": 200,
-                        "body": "This was timed correctly.",
-                        "web_url": "https://chat.reddit.com/room/!r:reddit.com/event/$timed",
+                        "body": "look https://example.com/tmdXYZ/",
+                        "web_url": "https://chat.reddit.com/room/!r:reddit.com/event/$generic",
                         "raw_json": {},
                     },
                     {
@@ -186,10 +186,10 @@ class SearchTests(unittest.TestCase):
                 connection.commit()
 
                 rows = smart_search_messages(connection, "tmd", 10)
-                self.assertEqual(
-                    ["$real"],
-                    [row["event_id"] for row in rows],
-                )
+                ids = [row["event_id"] for row in rows]
+                self.assertNotIn("$reddit", ids)
+                self.assertIn("$generic", ids)
+                self.assertIn("$real", ids)
             finally:
                 connection.close()
 
