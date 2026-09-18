@@ -5,7 +5,7 @@ import socket
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
@@ -119,10 +119,31 @@ def _auth_from(url: str, headers: dict[str, Any]) -> MatrixAuth | None:
     )
 
 
+class MatrixRequestError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.retryable = retryable
+
+
 class MatrixClient:
-    def __init__(self, auth: MatrixAuth, timeout: float = 30.0) -> None:
+    RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+    def __init__(
+        self,
+        auth: MatrixAuth,
+        timeout: float = 30.0,
+        retries: int = 3,
+    ) -> None:
         self.auth = auth
         self.timeout = timeout
+        self.retries = retries
 
     def get(
         self,
@@ -133,26 +154,56 @@ class MatrixClient:
         if params:
             url += "?" + urlencode(params)
 
-        request = Request(
-            url,
-            headers={
-                "Authorization": self.auth.authorization,
-                "Accept": "application/json",
-                "User-Agent": "reddex/0.1",
-            },
-        )
-        try:
-            with urlopen(request, timeout=self.timeout) as response:
-                data = json.load(response)
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", "replace")
-            raise RuntimeError(
-                f"Matrix request failed: HTTP {exc.code} {path}: {body[:500]}"
-            ) from exc
+        for attempt in range(self.retries + 1):
+            request = Request(
+                url,
+                headers={
+                    "Authorization": self.auth.authorization,
+                    "Accept": "application/json",
+                    "User-Agent": "reddex/0.1",
+                },
+            )
+            try:
+                with urlopen(request, timeout=self.timeout) as response:
+                    data = json.load(response)
+            except HTTPError as exc:
+                body = exc.read().decode("utf-8", "replace")
+                retryable = exc.code in self.RETRYABLE_STATUS
+                if retryable and attempt < self.retries:
+                    delay = min(2**attempt, 8)
+                    print(
+                        f"    HTTP {exc.code}; retrying in {delay}s "
+                        f"({attempt + 1}/{self.retries})"
+                    )
+                    time.sleep(delay)
+                    continue
+                raise MatrixRequestError(
+                    f"Matrix request failed: HTTP {exc.code} {path}: "
+                    f"{body[:500]}",
+                    status=exc.code,
+                    retryable=retryable,
+                ) from exc
+            except (URLError, TimeoutError, socket.timeout) as exc:
+                if attempt < self.retries:
+                    delay = min(2**attempt, 8)
+                    print(
+                        f"    network error; retrying in {delay}s "
+                        f"({attempt + 1}/{self.retries})"
+                    )
+                    time.sleep(delay)
+                    continue
+                raise MatrixRequestError(
+                    f"Matrix request failed: {path}: {exc}",
+                    retryable=True,
+                ) from exc
 
-        if not isinstance(data, dict):
-            raise RuntimeError(f"Unexpected Matrix response for {path}")
-        return data
+            if not isinstance(data, dict):
+                raise MatrixRequestError(
+                    f"Unexpected Matrix response for {path}"
+                )
+            return data
+
+        raise AssertionError("unreachable")
 
 
 def message_url(room_id: str, event_id: str) -> str:
@@ -281,14 +332,21 @@ def sync_archive(
 
             while isinstance(token, str) and token and token not in seen_tokens:
                 seen_tokens.add(token)
-                page = client.get(
-                    f"/_matrix/client/v3/rooms/{room_id}/messages",
-                    {
-                        "from": token,
-                        "dir": "b",
-                        "limit": page_limit,
-                    },
-                )
+                try:
+                    page = client.get(
+                        f"/_matrix/client/v3/rooms/{room_id}/messages",
+                        {
+                            "from": token,
+                            "dir": "b",
+                            "limit": page_limit,
+                        },
+                    )
+                except MatrixRequestError as exc:
+                    connection.commit()
+                    print(
+                        f"    skipped remaining history for this room: {exc}"
+                    )
+                    break
                 chunk = page.get("chunk", [])
                 if not isinstance(chunk, list):
                     break
