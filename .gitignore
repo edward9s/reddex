@@ -17,3 +17,5 @@ data/
 
 # Database encryption key
 db_key
+
+*.keyvault
