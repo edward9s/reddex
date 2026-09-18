@@ -47,15 +47,15 @@ input[type=search],input[type=password]{width:100%;padding:10px;border:1px solid
 </style>
 </head>
 <body><div class="wrap">
-<header><div><h1>reddex</h1><div class="muted">本機 Reddit Chat 封存</div></div><div id="summary" class="muted"></div></header>
+<header><div><h1>reddex</h1><div class="muted">Local Reddit Chat archive</div></div><div id="summary" class="muted"></div></header>
 
 <section id="unlockCard" class="card">
   <form id="unlockForm">
-    <strong id="unlockTitle">解鎖資料庫</strong>
+    <strong id="unlockTitle">Unlock database</strong>
     <div class="row" style="margin-top:12px">
-      <input id="password" class="grow" type="password" placeholder="資料庫密碼" autocomplete="off">
-      <input id="confirmPassword" class="grow" type="password" placeholder="再次輸入密碼" autocomplete="off" hidden>
-      <button id="unlockButton" class="primary">解鎖</button>
+      <input id="password" class="grow" type="password" placeholder="Database password" autocomplete="off">
+      <input id="confirmPassword" class="grow" type="password" placeholder="Confirm password" autocomplete="off" hidden>
+      <button id="unlockButton" class="primary">Unlock</button>
     </div>
     <div id="unlockHint" class="muted" style="margin-top:10px"></div>
     <div id="unlockError" class="bad"></div>
@@ -65,38 +65,38 @@ input[type=search],input[type=password]{width:100%;padding:10px;border:1px solid
 <div id="app" hidden>
 <section class="card">
   <div class="row">
-    <button id="load" class="primary">載入聊天室</button>
-    <button id="all">全選</button>
-    <button id="none">全不選</button>
-    <button id="sync" class="primary" disabled>同步已選</button>
+    <button id="load" class="primary">Load rooms</button>
+    <button id="all">Select all</button>
+    <button id="none">Select none</button>
+    <button id="sync" class="primary" disabled>Sync selected</button>
     <span id="phase" class="muted"></span>
   </div>
-  <div class="muted" style="margin-top:10px">若載入時停在等待 Matrix 授權，切到 Reddit Chat 分頁並切換一次聊天室。</div>
+  <div class="muted" style="margin-top:10px">If loading waits for Matrix authorization, switch to the Reddit Chat tab and change rooms once.</div>
   <div id="rooms" class="rooms"></div>
 </section>
 
 <section class="card">
-  <strong>進度</strong>
+  <strong>Progress</strong>
   <div id="error" class="bad"></div>
   <pre id="log" class="log"></pre>
 </section>
 
 <section class="card">
   <form id="searchForm" class="row">
-    <input id="query" class="grow" type="search" placeholder="搜尋已封存留言" autocomplete="off">
-    <button class="primary">搜尋</button>
+    <input id="query" class="grow" type="search" placeholder="Search archived messages" autocomplete="off">
+    <button class="primary">Search</button>
   </form>
   <div id="results" class="results"></div>
 </section>
 
 <section class="card">
   <form id="passwdForm">
-    <strong>變更資料庫密碼</strong>
+    <strong>變更Database password</strong>
     <div class="row" style="margin-top:12px">
-      <input id="currentPassword" class="grow" type="password" placeholder="目前密碼" autocomplete="off">
-      <input id="newPassword" class="grow" type="password" placeholder="新密碼" autocomplete="off">
-      <input id="confirmNewPassword" class="grow" type="password" placeholder="再次輸入新密碼" autocomplete="off">
-      <button class="primary">變更密碼</button>
+      <input id="currentPassword" class="grow" type="password" placeholder="Current password" autocomplete="off">
+      <input id="newPassword" class="grow" type="password" placeholder="New password" autocomplete="off">
+      <input id="confirmNewPassword" class="grow" type="password" placeholder="再次輸入New password" autocomplete="off">
+      <button class="primary">Change password</button>
     </div>
     <div id="passwdStatus" style="margin-top:10px"></div>
   </form>
@@ -159,7 +159,7 @@ $("passwdForm").onsubmit = async (ev)=>{
     $("newPassword").value="";
     $("confirmNewPassword").value="";
     status.className="good";
-    status.textContent="資料庫密碼已變更。";
+    status.textContent="Database password已變更。";
   }catch(e){
     status.className="bad";
     status.textContent=e.message;
@@ -175,7 +175,7 @@ $("none").onclick = ()=>document.querySelectorAll(".roomCheck").forEach(x=>x.che
 $("sync").onclick = async ()=>{
   $("error").textContent="";
   const ids=[...document.querySelectorAll(".roomCheck:checked")].map(x=>x.value);
-  if(!ids.length){$("error").textContent="至少選擇一個聊天室。";return;}
+  if(!ids.length){$("error").textContent="Select at least one room.";return;}
   try{await post("/api/sync",{room_ids:ids});}catch(e){$("error").textContent=e.message;}
 };
 
@@ -190,8 +190,8 @@ $("searchForm").onsubmit = async (ev)=>{
     <div class="result">
       <div class="meta">${esc(x.room_name || x.room_id)} · ${esc(x.sender || "-")} · ${new Date(x.created_at_ms).toLocaleString()}</div>
       <div class="body">${esc(x.body)}</div>
-      <a href="${esc(x.web_url)}" target="_blank" rel="noopener">開啟留言</a>
-    </div>`).join("") || '<div class="muted">沒有搜尋結果。</div>';
+      <a href="${esc(x.web_url)}" target="_blank" rel="noopener">Open message</a>
+    </div>`).join("") || '<div class="muted">No search results.</div>';
 };
 
 async function pollOnce(){
@@ -200,17 +200,17 @@ async function pollOnce(){
   unlocked=!!s.unlocked;
   $("unlockCard").hidden=unlocked;
   $("app").hidden=!unlocked;
-  $("summary").textContent=unlocked ? `${s.message_count} 則已封存留言` : "資料庫已鎖定";
+  $("summary").textContent=unlocked ? `${s.message_count} archived messages` : "Database locked";
 
   if(!unlocked){
     const exists=!!s.database_exists;
-    $("unlockTitle").textContent=exists ? "解鎖資料庫" : "建立資料庫密碼";
-    $("unlockButton").textContent=exists ? "解鎖" : "建立並解鎖";
+    $("unlockTitle").textContent=exists ? "Unlock database" : "建立Database password";
+    $("unlockButton").textContent=exists ? "解鎖" : "Create and unlock";
     $("confirmPassword").hidden=exists;
     $("password").autocomplete="off";
     $("unlockHint").textContent=exists
-      ? "輸入密碼以解鎖 SQLCipher 資料庫。"
-      : "第一次使用：設定 SQLCipher 資料庫密碼。";
+      ? "Enter the password to unlock the SQLCipher database."
+      : "第一次使用：設定 SQLCipher Database password。";
     return;
   }
 
@@ -408,7 +408,7 @@ class UIState:
             if self.busy:
                 raise RuntimeError("Another operation is already running.")
             if self.auth is None or not self.rooms:
-                raise RuntimeError("請先載入聊天室。")
+                raise RuntimeError("請先Load rooms。")
             valid = {room.room_id for room in self.rooms}
             selected = room_ids & valid
             if not selected:

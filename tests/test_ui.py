@@ -19,11 +19,11 @@ def make_state(path: Path) -> UIState:
 
 class UITests(unittest.TestCase):
     def test_ui_contains_unlock_sync_search_and_message_link_controls(self) -> None:
-        self.assertIn("資料庫密碼", INDEX_HTML)
-        self.assertIn("同步已選", INDEX_HTML)
-        self.assertIn("搜尋已封存留言", INDEX_HTML)
-        self.assertIn("開啟留言", INDEX_HTML)
-        self.assertIn("變更資料庫密碼", INDEX_HTML)
+        self.assertIn("Database password", INDEX_HTML)
+        self.assertIn("Sync selected", INDEX_HTML)
+        self.assertIn("Search archived messages", INDEX_HTML)
+        self.assertIn("Open message", INDEX_HTML)
+        self.assertIn("Change database password", INDEX_HTML)
 
     def test_state_starts_locked_and_unlocks_with_password(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

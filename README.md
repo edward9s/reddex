@@ -420,7 +420,7 @@ reddex passwd
 Web UI:
 
 1. Unlock the database.
-2. Use **變更資料庫密碼**.
+2. Use **Change database password**.
 3. Enter the current password, the new password, and the new password again.
 
 After a successful change, the old password no longer opens the database. The web process immediately replaces its in-memory password with the new one so later searches and sync operations continue to work.
