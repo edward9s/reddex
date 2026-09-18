@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from .db import DatabaseError, connect, init_db
+from .db import (
+    DatabaseError,
+    change_database_password,
+    connect,
+    init_db,
+)
 from .search import smart_search_messages
 from .matrix import MatrixAuth, prepare_rooms, sync_prepared
 
@@ -83,6 +88,19 @@ input[type=search],input[type=password]{width:100%;padding:10px;border:1px solid
   </form>
   <div id="results" class="results"></div>
 </section>
+
+<section class="card">
+  <form id="passwdForm">
+    <strong>變更資料庫密碼</strong>
+    <div class="row" style="margin-top:12px">
+      <input id="currentPassword" class="grow" type="password" placeholder="目前密碼" autocomplete="off">
+      <input id="newPassword" class="grow" type="password" placeholder="新密碼" autocomplete="off">
+      <input id="confirmNewPassword" class="grow" type="password" placeholder="再次輸入新密碼" autocomplete="off">
+      <button class="primary">變更密碼</button>
+    </div>
+    <div id="passwdStatus" style="margin-top:10px"></div>
+  </form>
+</section>
 </div>
 </div>
 <script>
@@ -123,6 +141,28 @@ $("unlockForm").onsubmit = async (ev)=>{
     await pollOnce();
   }catch(e){
     $("unlockError").textContent=e.message;
+  }
+};
+
+$("passwdForm").onsubmit = async (ev)=>{
+  ev.preventDefault();
+  const status=$("passwdStatus");
+  status.className="";
+  status.textContent="";
+  try{
+    await post("/api/passwd",{
+      current_password:$("currentPassword").value,
+      new_password:$("newPassword").value,
+      confirm_password:$("confirmNewPassword").value
+    });
+    $("currentPassword").value="";
+    $("newPassword").value="";
+    $("confirmNewPassword").value="";
+    status.className="good";
+    status.textContent="資料庫密碼已變更。";
+  }catch(e){
+    status.className="bad";
+    status.textContent=e.message;
   }
 };
 
@@ -285,6 +325,36 @@ class UIState:
             self.database_password = password
             self.phase = "Ready"
             self.error = None
+
+    def change_password(
+        self,
+        current_password: str,
+        new_password: str,
+        confirm_password: str,
+    ) -> None:
+        if new_password != confirm_password:
+            raise RuntimeError("New database passwords do not match.")
+        if not new_password:
+            raise RuntimeError("New database password must not be empty.")
+
+        with self.lock:
+            if self.busy:
+                raise RuntimeError(
+                    "Cannot change the database password while an operation is running."
+                )
+            if self.database_password is None:
+                raise RuntimeError("Database is locked.")
+            if current_password != self.database_password:
+                raise RuntimeError("Incorrect current database password.")
+
+        change_database_password(
+            self.db_path,
+            current_password,
+            new_password,
+        )
+
+        with self.lock:
+            self.database_password = new_password
 
     def require_database_password(self) -> str:
         with self.lock:
@@ -479,6 +549,27 @@ class Handler(BaseHTTPRequestHandler):
                 ):
                     raise RuntimeError("Invalid password.")
                 self.state.unlock(password, confirm_password)
+                _json(self, HTTPStatus.OK, {"ok": True})
+                return
+
+            if parsed.path == "/api/passwd":
+                current_password = payload.get("current_password", "")
+                new_password = payload.get("new_password", "")
+                confirm_password = payload.get("confirm_password", "")
+                if not all(
+                    isinstance(value, str)
+                    for value in (
+                        current_password,
+                        new_password,
+                        confirm_password,
+                    )
+                ):
+                    raise RuntimeError("Invalid password.")
+                self.state.change_password(
+                    current_password,
+                    new_password,
+                    confirm_password,
+                )
                 _json(self, HTTPStatus.OK, {"ok": True})
                 return
 
