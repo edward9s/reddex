@@ -4,7 +4,7 @@ import json
 import socket
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
@@ -12,7 +12,13 @@ from urllib.request import Request, urlopen
 import websocket
 
 from .browser_rooms import VisibleRoom, discover_visible_rooms
-from .db import init_db, upsert_message
+from .db import (
+    backfill_complete,
+    init_db,
+    message_exists,
+    set_backfill_complete,
+    upsert_message,
+)
 from .probe import fetch_targets, select_target
 
 MATRIX_HOST = "matrix.redditspace.com"
@@ -265,24 +271,15 @@ def sync_archive(
     target_filter: str = "reddit",
     auth_timeout: float = 30.0,
     page_limit: int = 100,
-    visible_rooms: list[VisibleRoom] | None = None,
-    selected_room_ids: set[str] | None = None,
+    room_selector: Callable[
+        [list[VisibleRoom]], list[VisibleRoom]
+    ] | None = None,
 ) -> tuple[int, int]:
-    if visible_rooms is None:
-        print("Reading the visible Reddit Chat room list from Chrome...")
-        visible_rooms = discover_visible_rooms(
-            endpoint=endpoint,
-            target_filter=target_filter,
-        )
-    visible_by_id = {room.room_id: room for room in visible_rooms}
-    if selected_room_ids is not None:
-        visible_by_id = {
-            room_id: room
-            for room_id, room in visible_by_id.items()
-            if room_id in selected_room_ids
-        }
-    if not visible_by_id:
-        raise RuntimeError("No Reddit Chat rooms were selected.")
+    print("Reading the visible Reddit Chat room list from Chrome...")
+    browser_rooms = discover_visible_rooms(
+        endpoint=endpoint,
+        target_filter=target_filter,
+    )
 
     print("Waiting for an authenticated Reddit Matrix request from Chrome...")
     auth = discover_matrix_auth(
@@ -291,7 +288,6 @@ def sync_archive(
         timeout=auth_timeout,
     )
     print("Matrix authorization found. Token remains in memory only.")
-    print(f"Selected {len(visible_by_id)} Reddit Chat room(s).")
 
     client = MatrixClient(auth)
     sync_filter = json.dumps(
@@ -321,16 +317,21 @@ def sync_archive(
     if not isinstance(joined, dict):
         joined = {}
 
-    selected_rooms: list[tuple[str, dict[str, Any], str | None]] = []
-    missing_rooms: list[str] = []
-    for room_id, visible in visible_by_id.items():
-        room = joined.get(room_id)
-        if isinstance(room, dict):
-            selected_rooms.append((room_id, room, visible.label))
-        else:
-            missing_rooms.append(room_id)
+    available: list[VisibleRoom] = []
+    room_payloads: dict[str, dict[str, Any]] = {}
+    for visible in browser_rooms:
+        room = joined.get(visible.room_id)
+        if not isinstance(room, dict):
+            continue
+        room_payloads[visible.room_id] = room
+        available.append(
+            VisibleRoom(
+                visible.room_id,
+                _room_name(room) or visible.label,
+            )
+        )
 
-    if not selected_rooms:
+    if not available:
         raise RuntimeError(
             "None of the rooms visible in Reddit Chat were present in the "
             "authenticated Matrix /sync response. Refusing to fall back to "
@@ -338,24 +339,29 @@ def sync_archive(
         )
 
     print(
-        f"Syncing {len(selected_rooms)} visible room(s); "
-        f"ignoring {max(len(joined) - len(selected_rooms), 0)} other "
+        f"Found {len(available)} visible Reddit Chat room(s); "
+        f"ignoring {max(len(joined) - len(available), 0)} other "
         "joined Matrix room(s)."
     )
-    if missing_rooms:
-        print(
-            f"Warning: {len(missing_rooms)} visible room(s) were not present "
-            "in this Matrix /sync response and will be skipped."
-        )
+
+    selected = room_selector(available) if room_selector else available
+    selected_ids = {room.room_id for room in selected}
+    selected_rooms = [
+        room for room in available if room.room_id in selected_ids
+    ]
+    if not selected_rooms:
+        raise RuntimeError("No Reddit Chat rooms were selected.")
 
     connection = init_db(db_path)
     room_count = 0
-    message_count = 0
+    new_message_count = 0
 
     try:
-        for room_id, room, visible_label in selected_rooms:
+        for visible in selected_rooms:
+            room_id = visible.room_id
+            room = room_payloads[room_id]
             room_count += 1
-            room_name = _room_name(room) or visible_label
+            room_name = visible.label
             label = room_name or room_id
             print(f"[{room_count}/{len(selected_rooms)}] {label}")
 
@@ -363,16 +369,39 @@ def sync_archive(
             if not isinstance(timeline, dict):
                 timeline = {}
 
-            for event in timeline.get("events", []):
+            history_complete = backfill_complete(connection, room_id)
+            overlap_found = False
+            room_new = 0
+
+            timeline_events = timeline.get("events", [])
+            if not isinstance(timeline_events, list):
+                timeline_events = []
+
+            for event in timeline_events:
                 if not isinstance(event, dict):
                     continue
                 message = message_from_event(room_id, room_name, event)
-                if message is not None:
-                    upsert_message(connection, message)
-                    message_count += 1
+                if message is None:
+                    continue
+
+                if message_exists(connection, message["event_id"]):
+                    overlap_found = True
+                    continue
+
+                upsert_message(connection, message)
+                room_new += 1
+                new_message_count += 1
+
+            # Once a room has been fully backfilled, seeing an already archived
+            # event in the newest timeline means there is nothing older to fetch.
+            if history_complete and overlap_found:
+                connection.commit()
+                print(f"    +{room_new} new message(s)")
+                continue
 
             token = timeline.get("prev_batch")
             seen_tokens: set[str] = set()
+            reached_history_end = False
 
             while isinstance(token, str) and token and token not in seen_tokens:
                 seen_tokens.add(token)
@@ -391,20 +420,33 @@ def sync_archive(
                         f"    skipped remaining history for this room: {exc}"
                     )
                     break
+
                 chunk = page.get("chunk", [])
                 if not isinstance(chunk, list):
                     break
 
+                stop_on_overlap = False
                 for event in chunk:
                     if not isinstance(event, dict):
                         continue
                     message = message_from_event(room_id, room_name, event)
-                    if message is not None:
-                        upsert_message(connection, message)
-                        message_count += 1
+                    if message is None:
+                        continue
+
+                    if message_exists(connection, message["event_id"]):
+                        if history_complete:
+                            stop_on_overlap = True
+                            break
+                        continue
+
+                    upsert_message(connection, message)
+                    room_new += 1
+                    new_message_count += 1
 
                 connection.commit()
-                print(f"    archived {message_count} message event(s)", end="\r")
+
+                if stop_on_overlap:
+                    break
 
                 next_token = page.get("end")
                 if (
@@ -413,12 +455,17 @@ def sync_archive(
                     or not next_token
                     or next_token == token
                 ):
+                    reached_history_end = True
                     break
                 token = next_token
 
-            connection.commit()
-            print(f"    archived {message_count} message event(s)")
+            if not history_complete and reached_history_end:
+                set_backfill_complete(connection, room_id, True)
+                connection.commit()
+
+            print(f"    +{room_new} new message(s)")
     finally:
         connection.close()
 
-    return room_count, message_count
+    return room_count, new_message_count
+
