@@ -213,6 +213,8 @@ For fuzzy matches:
 
 Search ranking prioritizes match quality first. Equally good matches are ordered with newer messages first.
 
+Reddit URLs inside message bodies are excluded from matching, so random subreddit paths, comment IDs, event-like strings, or other text inside `reddit.com` / `redd.it` links do not create search hits. The URL remains stored and displayed; it is only ignored for matching.
+
 SQLite FTS5 is still maintained incrementally by triggers, but the current smart-search ranking reads archived messages and applies the SMM-style matcher itself; FTS5 is not what provides the fuzzy ranking.
 
 ## Stored message fields
