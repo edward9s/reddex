@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
+import sqlite3 as plain_sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from reddex.db import (
     backfill_complete,
@@ -89,6 +92,54 @@ class DatabaseTests(unittest.TestCase):
                 )
             finally:
                 connection.close()
+
+    def test_plaintext_database_is_migrated_to_sqlcipher(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "reddex.db"
+            key_file = root / "db_key"
+
+            plain = plain_sqlite3.connect(path)
+            try:
+                plain.execute("CREATE TABLE marker (value TEXT NOT NULL)")
+                plain.execute("INSERT INTO marker VALUES ('secret')")
+                plain.commit()
+            finally:
+                plain.close()
+
+            self.assertEqual(
+                b"SQLite format 3\x00",
+                path.read_bytes()[:16],
+            )
+
+            with patch.dict(
+                os.environ,
+                {"REDDEX_DB_KEY_FILE": str(key_file)},
+            ):
+                connection = init_db(path)
+                try:
+                    row = connection.execute(
+                        "SELECT value FROM marker"
+                    ).fetchone()
+                    self.assertEqual("secret", row["value"])
+                finally:
+                    connection.close()
+
+            self.assertTrue(key_file.exists())
+            self.assertEqual(64, len(key_file.read_text().strip()))
+            self.assertNotEqual(
+                b"SQLite format 3\x00",
+                path.read_bytes()[:16],
+            )
+
+            plain = plain_sqlite3.connect(path)
+            try:
+                with self.assertRaises(plain_sqlite3.DatabaseError):
+                    plain.execute(
+                        "SELECT value FROM marker"
+                    ).fetchone()
+            finally:
+                plain.close()
 
 
 if __name__ == "__main__":
