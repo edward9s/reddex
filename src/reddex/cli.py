@@ -8,6 +8,7 @@ from .browser_rooms import discover_visible_rooms
 from .db import init_db, search_messages
 from .matrix import sync_archive
 from .probe import run_probe
+from .ui import run_ui
 
 DEFAULT_DB = Path("data/reddex.db")
 DEFAULT_PROBE = Path("data/probe.jsonl")
@@ -139,6 +140,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="sync every visible Reddit Chat room without prompting",
     )
 
+    ui_parser = subparsers.add_parser(
+        "ui",
+        help="start the local reddex web UI",
+    )
+    ui_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    ui_parser.add_argument(
+        "--endpoint",
+        default="http://127.0.0.1:9222",
+        help="CDP HTTP endpoint",
+    )
+    ui_parser.add_argument(
+        "--target-filter",
+        default="reddit",
+        help="substring used to choose a Chrome tab",
+    )
+    ui_parser.add_argument(
+        "--auth-timeout",
+        type=float,
+        default=30.0,
+        help="seconds to wait for a Matrix request from Chrome",
+    )
+    ui_parser.add_argument(
+        "--page-limit",
+        type=int,
+        default=100,
+        help="Matrix history events requested per page",
+    )
+    ui_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="UI bind address",
+    )
+    ui_parser.add_argument(
+        "--port",
+        type=int,
+        default=8787,
+        help="UI port",
+    )
+
     probe_parser = subparsers.add_parser(
         "probe",
         help="capture Reddit-related CDP network traffic for debugging",
@@ -220,6 +260,18 @@ def main() -> None:
             room_selector=None if args.all_rooms else choose_rooms,
         )
         print(f"Done: {rooms} room(s), {messages} new message(s) archived.")
+        return
+
+    if args.command == "ui":
+        run_ui(
+            db_path=args.db,
+            endpoint=args.endpoint,
+            target_filter=args.target_filter,
+            auth_timeout=args.auth_timeout,
+            page_limit=args.page_limit,
+            host=args.host,
+            port=args.port,
+        )
         return
 
     if args.command == "probe":
