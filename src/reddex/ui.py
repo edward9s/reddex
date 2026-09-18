@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from .db import connect, init_db, search_messages
+from .db import connect, init_db
+from .search import smart_search_messages
 from .matrix import MatrixAuth, prepare_rooms, sync_prepared
 
 
@@ -329,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             connection = connect(self.state.db_path)
             try:
-                rows = search_messages(connection, query, 100)
+                rows = smart_search_messages(connection, query, 100)
                 results = [
                     {
                         "event_id": row["event_id"],
