@@ -4,7 +4,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from reddex.db import init_db, search_messages, upsert_message
+from reddex.db import (
+    backfill_complete,
+    init_db,
+    message_exists,
+    search_messages,
+    set_backfill_complete,
+    upsert_message,
+)
 
 
 class DatabaseTests(unittest.TestCase):
@@ -44,6 +51,42 @@ class DatabaseTests(unittest.TestCase):
                 )
                 connection.commit()
                 self.assertEqual([], search_messages(connection, "SQLite"))
+            finally:
+                connection.close()
+
+    def test_incremental_sync_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reddex.db"
+            connection = init_db(path)
+            try:
+                self.assertFalse(
+                    backfill_complete(connection, "!room:reddit.com")
+                )
+                self.assertFalse(message_exists(connection, "$missing"))
+
+                message = {
+                    "event_id": "$existing",
+                    "room_id": "!room:reddit.com",
+                    "room_name": "test room",
+                    "sender": "alice",
+                    "created_at_ms": 1_700_000_000_000,
+                    "body": "hello",
+                    "web_url": (
+                        "https://chat.reddit.com/room/"
+                        "!room:reddit.com/event/$existing"
+                    ),
+                    "raw_json": {"example": True},
+                }
+                upsert_message(connection, message)
+                set_backfill_complete(
+                    connection, "!room:reddit.com", True
+                )
+                connection.commit()
+
+                self.assertTrue(message_exists(connection, "$existing"))
+                self.assertTrue(
+                    backfill_complete(connection, "!room:reddit.com")
+                )
             finally:
                 connection.close()
 
