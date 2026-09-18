@@ -67,11 +67,12 @@ Install prerequisites and reddex:
 ```sh
 pkg update
 pkg install python python-pip android-tools clang openssl
+python -m pip install setuptools wheel
 python -m pip install --no-build-isolation "sqlcipher3==0.6.2"
 python -m pip install -e .
 ```
 
-The `--no-build-isolation` flag is intentional on Termux. `sqlcipher3` 0.6.2 declares Conan as an isolated build dependency; on Android that path currently fails because Conan's generated Android profile lacks `settings.os.api_level`. Disabling build isolation makes `sqlcipher3` compile its bundled SQLCipher code against Termux's installed OpenSSL instead.
+The `setuptools` and `wheel` install is required because `--no-build-isolation` makes pip use the current Termux Python environment as the build environment. The `--no-build-isolation` flag is intentional: `sqlcipher3` 0.6.2 declares Conan as an isolated build dependency; on Android that path currently fails because Conan's generated Android profile lacks `settings.os.api_level`. Without isolation, setup.py uses Termux's installed OpenSSL instead.
 
 Enable **Wireless debugging** in Android Developer options. Pair/connect using the addresses shown by Android:
 
@@ -314,6 +315,7 @@ On Termux, PyPI does not publish an Android wheel for `sqlcipher3`. Install it w
 
 ```sh
 pkg install clang openssl
+python -m pip install setuptools wheel
 python -m pip install --no-build-isolation "sqlcipher3==0.6.2"
 python -m pip install -e .
 ```
