@@ -7,6 +7,7 @@ from pathlib import Path
 
 from reddex.db import (
     backfill_complete,
+    change_database_password,
     connect,
     init_db,
     message_exists,
@@ -113,6 +114,45 @@ class DatabaseTests(unittest.TestCase):
                     ).fetchone()
             finally:
                 plain.close()
+
+    def test_change_database_password_rekeys_database(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reddex.db"
+            connection = init_db(path, PASSWORD)
+            connection.close()
+
+            new_password = "new correct horse battery staple"
+            change_database_password(path, PASSWORD, new_password)
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Incorrect database password or invalid database",
+            ):
+                connect(path, PASSWORD)
+
+            connection = connect(path, new_password)
+            try:
+                row = connection.execute(
+                    "SELECT COUNT(*) AS count FROM messages"
+                ).fetchone()
+                self.assertEqual(0, int(row["count"]))
+            finally:
+                connection.close()
+
+    def test_change_database_password_rejects_empty_new_password(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reddex.db"
+            connection = init_db(path, PASSWORD)
+            connection.close()
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "New database password must not be empty",
+            ):
+                change_database_password(path, PASSWORD, "")
+
+            connection = connect(path, PASSWORD)
+            connection.close()
 
     def test_wrong_password_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
