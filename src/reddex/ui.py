@@ -55,8 +55,8 @@ input[type=search],input[type=password]{width:100%;padding:10px;border:1px solid
   <form id="unlockForm">
     <strong id="unlockTitle">解鎖資料庫</strong>
     <div class="row" style="margin-top:12px">
-      <input id="password" class="grow" type="password" placeholder="資料庫密碼" autocomplete="current-password">
-      <input id="confirmPassword" class="grow" type="password" placeholder="再次輸入密碼" autocomplete="new-password" hidden>
+      <input id="password" class="grow" type="password" placeholder="資料庫密碼" autocomplete="off">
+      <input id="confirmPassword" class="grow" type="password" placeholder="再次輸入密碼" autocomplete="off" hidden>
       <button id="unlockButton" class="primary">解鎖</button>
     </div>
     <div id="unlockHint" class="muted" style="margin-top:10px"></div>
@@ -174,7 +174,7 @@ async function pollOnce(){
     $("unlockTitle").textContent=exists ? "解鎖資料庫" : "建立資料庫密碼";
     $("unlockButton").textContent=exists ? "解鎖" : "建立並解鎖";
     $("confirmPassword").hidden=exists;
-    $("password").autocomplete=exists ? "current-password" : "new-password";
+    $("password").autocomplete="off";
     $("unlockHint").textContent=exists
       ? "密碼只用來解鎖 key vault，不會寫入磁碟。"
       : "第一次使用：設定密碼來加密資料庫 key。";
@@ -431,7 +431,15 @@ class Handler(BaseHTTPRequestHandler):
             if not query:
                 _json(self, HTTPStatus.BAD_REQUEST, {"error": "Missing query."})
                 return
-            db_key = self.state.require_db_key()
+            try:
+                db_key = self.state.require_db_key()
+            except RuntimeError as exc:
+                _json(
+                    self,
+                    HTTPStatus.LOCKED,
+                    {"error": str(exc)},
+                )
+                return
             connection = connect(self.state.db_path, db_key)
             try:
                 rows = smart_search_messages(connection, query, 100)
