@@ -24,6 +24,14 @@ from .probe import fetch_targets, select_target
 MATRIX_HOST = "matrix.redditspace.com"
 MATRIX_BASE = "https://matrix.redditspace.com"
 CHAT_BASE = "https://chat.reddit.com"
+ProgressCallback = Callable[[str], None]
+
+
+def _emit(progress: ProgressCallback | None, message: str) -> None:
+    if progress is None:
+        print(message)
+    else:
+        progress(message)
 
 
 def _header(headers: dict[str, Any], name: str) -> str | None:
@@ -147,10 +155,12 @@ class MatrixClient:
         auth: MatrixAuth,
         timeout: float = 30.0,
         retries: int = 3,
+        progress: ProgressCallback | None = None,
     ) -> None:
         self.auth = auth
         self.timeout = timeout
         self.retries = retries
+        self.progress = progress
 
     def get(
         self,
@@ -178,9 +188,10 @@ class MatrixClient:
                 retryable = exc.code in self.RETRYABLE_STATUS
                 if retryable and attempt < self.retries:
                     delay = min(2**attempt, 8)
-                    print(
-                        f"    HTTP {exc.code}; retrying in {delay}s "
-                        f"({attempt + 1}/{self.retries})"
+                    _emit(
+                        self.progress,
+                        f"HTTP {exc.code}; retrying in {delay}s "
+                        f"({attempt + 1}/{self.retries})",
                     )
                     time.sleep(delay)
                     continue
@@ -193,9 +204,10 @@ class MatrixClient:
             except (URLError, TimeoutError, socket.timeout) as exc:
                 if attempt < self.retries:
                     delay = min(2**attempt, 8)
-                    print(
-                        f"    network error; retrying in {delay}s "
-                        f"({attempt + 1}/{self.retries})"
+                    _emit(
+                        self.progress,
+                        f"network error; retrying in {delay}s "
+                        f"({attempt + 1}/{self.retries})",
                     )
                     time.sleep(delay)
                     continue
@@ -265,31 +277,31 @@ def _room_name(room: dict[str, Any]) -> str | None:
     return None
 
 
-def sync_archive(
-    db_path: str,
+def prepare_rooms(
     endpoint: str = "http://127.0.0.1:9222",
     target_filter: str = "reddit",
     auth_timeout: float = 30.0,
-    page_limit: int = 100,
-    room_selector: Callable[
-        [list[VisibleRoom]], list[VisibleRoom]
-    ] | None = None,
-) -> tuple[int, int]:
-    print("Reading the visible Reddit Chat room list from Chrome...")
+    progress: ProgressCallback | None = None,
+) -> tuple[
+    MatrixAuth,
+    list[VisibleRoom],
+    dict[str, dict[str, Any]],
+]:
+    _emit(progress, "Reading the visible Reddit Chat room list from Chrome...")
     browser_rooms = discover_visible_rooms(
         endpoint=endpoint,
         target_filter=target_filter,
     )
 
-    print("Waiting for an authenticated Reddit Matrix request from Chrome...")
+    _emit(progress, "Waiting for an authenticated Reddit Matrix request from Chrome...")
     auth = discover_matrix_auth(
         endpoint=endpoint,
         target_filter=target_filter,
         timeout=auth_timeout,
     )
-    print("Matrix authorization found. Token remains in memory only.")
+    _emit(progress, "Matrix authorization found. Token remains in memory only.")
 
-    client = MatrixClient(auth)
+    client = MatrixClient(auth, progress=progress)
     sync_filter = json.dumps(
         {
             "room": {
@@ -338,20 +350,36 @@ def sync_archive(
             "all joined Matrix rooms."
         )
 
-    print(
+    _emit(
+        progress,
         f"Found {len(available)} visible Reddit Chat room(s); "
         f"ignoring {max(len(joined) - len(available), 0)} other "
-        "joined Matrix room(s)."
+        "joined Matrix room(s).",
     )
+    return auth, available, room_payloads
 
-    selected = room_selector(available) if room_selector else available
-    selected_ids = {room.room_id for room in selected}
-    selected_rooms = [
-        room for room in available if room.room_id in selected_ids
-    ]
+
+def sync_prepared(
+    db_path: str,
+    auth: MatrixAuth,
+    available_rooms: list[VisibleRoom],
+    room_payloads: dict[str, dict[str, Any]],
+    selected_room_ids: set[str] | None = None,
+    page_limit: int = 100,
+    progress: ProgressCallback | None = None,
+) -> tuple[int, int]:
+    if selected_room_ids is None:
+        selected_rooms = available_rooms
+    else:
+        selected_rooms = [
+            room
+            for room in available_rooms
+            if room.room_id in selected_room_ids
+        ]
     if not selected_rooms:
         raise RuntimeError("No Reddit Chat rooms were selected.")
 
+    client = MatrixClient(auth, progress=progress)
     connection = init_db(db_path)
     room_count = 0
     new_message_count = 0
@@ -359,11 +387,18 @@ def sync_archive(
     try:
         for visible in selected_rooms:
             room_id = visible.room_id
-            room = room_payloads[room_id]
+            room = room_payloads.get(room_id)
+            if not isinstance(room, dict):
+                _emit(progress, f"Skipping unavailable room: {room_id}")
+                continue
+
             room_count += 1
             room_name = visible.label
             label = room_name or room_id
-            print(f"[{room_count}/{len(selected_rooms)}] {label}")
+            _emit(
+                progress,
+                f"[{room_count}/{len(selected_rooms)}] {label}",
+            )
 
             timeline = room.get("timeline", {})
             if not isinstance(timeline, dict):
@@ -392,11 +427,9 @@ def sync_archive(
                 room_new += 1
                 new_message_count += 1
 
-            # Once a room has been fully backfilled, seeing an already archived
-            # event in the newest timeline means there is nothing older to fetch.
             if history_complete and overlap_found:
                 connection.commit()
-                print(f"    +{room_new} new message(s)")
+                _emit(progress, f"{label}: +{room_new} new message(s)")
                 continue
 
             token = timeline.get("prev_batch")
@@ -416,8 +449,9 @@ def sync_archive(
                     )
                 except MatrixRequestError as exc:
                     connection.commit()
-                    print(
-                        f"    skipped remaining history for this room: {exc}"
+                    _emit(
+                        progress,
+                        f"{label}: skipped remaining history: {exc}",
                     )
                     break
 
@@ -444,6 +478,10 @@ def sync_archive(
                     new_message_count += 1
 
                 connection.commit()
+                _emit(
+                    progress,
+                    f"{label}: {room_new} new message(s) so far",
+                )
 
                 if stop_on_overlap:
                     break
@@ -463,9 +501,41 @@ def sync_archive(
                 set_backfill_complete(connection, room_id, True)
                 connection.commit()
 
-            print(f"    +{room_new} new message(s)")
+            _emit(progress, f"{label}: +{room_new} new message(s)")
     finally:
         connection.close()
 
     return room_count, new_message_count
+
+
+def sync_archive(
+    db_path: str,
+    endpoint: str = "http://127.0.0.1:9222",
+    target_filter: str = "reddit",
+    auth_timeout: float = 30.0,
+    page_limit: int = 100,
+    room_selector: Callable[
+        [list[VisibleRoom]], list[VisibleRoom]
+    ] | None = None,
+    progress: ProgressCallback | None = None,
+) -> tuple[int, int]:
+    auth, available, room_payloads = prepare_rooms(
+        endpoint=endpoint,
+        target_filter=target_filter,
+        auth_timeout=auth_timeout,
+        progress=progress,
+    )
+
+    selected = room_selector(available) if room_selector else available
+    selected_ids = {room.room_id for room in selected}
+
+    return sync_prepared(
+        db_path=db_path,
+        auth=auth,
+        available_rooms=available,
+        room_payloads=room_payloads,
+        selected_room_ids=selected_ids,
+        page_limit=page_limit,
+        progress=progress,
+    )
 
