@@ -6,7 +6,7 @@ from getpass import getpass
 from pathlib import Path
 
 from .browser_rooms import discover_visible_rooms
-from .db import connect, init_db
+from .db import change_database_password, connect, init_db
 from .search import smart_search_messages
 from .matrix import sync_archive
 from .probe import run_probe
@@ -108,6 +108,12 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("query")
     search_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     search_parser.add_argument("--limit", type=int, default=20)
+
+    passwd_parser = subparsers.add_parser(
+        "passwd",
+        help="change the SQLCipher database password",
+    )
+    passwd_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
 
     rooms_parser = subparsers.add_parser(
         "rooms",
@@ -225,6 +231,22 @@ def main() -> None:
             print(row["snippet"])
             print(row["web_url"])
             print()
+        return
+
+    if args.command == "passwd":
+        if not args.db.is_file():
+            raise RuntimeError(f"Database does not exist: {args.db}")
+        current_password = getpass("Current database password: ")
+        new_password = getpass("New database password: ")
+        confirm = getpass("Confirm new database password: ")
+        if new_password != confirm:
+            raise RuntimeError("New database passwords do not match.")
+        change_database_password(
+            args.db,
+            current_password,
+            new_password,
+        )
+        print("Database password changed.")
         return
 
     if args.command == "rooms":
