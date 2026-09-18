@@ -1,18 +1,20 @@
 # reddex
 
-Archive Reddit Chat messages that are visible to your logged-in account and make them searchable locally with SQLite FTS5.
+Archive Reddit Chat messages visible to your logged-in account and search them locally with SQLite FTS5.
 
-## Status
+## How it works
 
-Early bootstrap. The current goal is deliberately small:
+reddex does not automate Reddit login and does not store your Reddit password or 2FA secret.
 
-1. Use your normal Android Chrome session for Reddit authentication.
-2. Connect to that already logged-in tab through Chrome DevTools Protocol (CDP).
-3. Capture the Reddit Chat network traffic needed to learn the current message format.
-4. Store parsed messages in SQLite.
-5. Search message text with SQLite FTS5.
+1. Log in to Reddit normally in Android Chrome.
+2. Expose that Chrome tab to Termux through ADB + Chrome DevTools Protocol (CDP).
+3. `reddex sync` observes an authenticated request to Reddit's Matrix chat server and keeps the Authorization value in memory only.
+4. It performs an initial Matrix sync to discover joined rooms.
+5. It paginates each room's history with the Matrix `/rooms/{roomId}/messages` endpoint.
+6. Text message events are written to SQLite and indexed with FTS5.
+7. Each archived message gets a deep link built from its Matrix `room_id` and `event_id`.
 
-The Reddit Chat parser is intentionally **not** hard-coded yet. Reddit Chat is not a stable public API, so `reddex probe` comes first: capture real traffic from your own authorized session, inspect the shape, then implement the parser against observed data.
+Reddit Chat is a private implementation built on Matrix and can change. `reddex probe` remains available for debugging when that happens.
 
 ## Requirements
 
@@ -22,14 +24,14 @@ The Reddit Chat parser is intentionally **not** hard-coded yet. Reddit Chat is n
 - Android platform tools (`adb`)
 - A Reddit account already logged in with Chrome
 
-Install the Termux prerequisites:
+Install Termux prerequisites:
 
 ```sh
 pkg update
-pkg install python android-tools
+pkg install python python-pip android-tools
 ```
 
-Install reddex from the repository:
+Install reddex:
 
 ```sh
 git clone https://github.com/edward9s/reddex.git
@@ -39,7 +41,7 @@ python -m pip install -e .
 
 ## 1. Connect Termux ADB to Android
 
-Enable **Wireless debugging** in Android Developer options, then pair/connect ADB using the address and ports shown by Android:
+Enable **Wireless debugging** in Android Developer options. Pair/connect using the addresses shown by Android:
 
 ```sh
 adb pair <host>:<pairing-port>
@@ -47,7 +49,7 @@ adb connect <host>:<debug-port>
 adb devices
 ```
 
-Open Chrome and make sure Reddit Chat is already logged in.
+Open Chrome, make sure Reddit is logged in, and open Reddit Chat.
 
 Expose Chrome's DevTools socket:
 
@@ -55,64 +57,69 @@ Expose Chrome's DevTools socket:
 adb forward tcp:9222 localabstract:chrome_devtools_remote
 ```
 
-Check that Chrome targets are visible:
+Confirm Chrome is reachable:
 
 ```sh
 curl http://127.0.0.1:9222/json
 ```
 
-## 2. Probe Reddit Chat traffic
-
-Open a Reddit Chat room in Chrome, then run:
+## 2. Archive chat history
 
 ```sh
-reddex probe
+reddex sync
 ```
 
-By default the probe:
+reddex waits for Chrome to issue an authenticated request to `matrix.redditspace.com`. If it says no authenticated Matrix request was observed, leave the command running and switch to another Reddit Chat room in Chrome, then retry if necessary.
 
-- connects to `http://127.0.0.1:9222`
-- selects a Reddit tab
-- enables CDP Network events
-- records Reddit-related HTTP response bodies and WebSocket frames
-- writes JSONL to `data/probe.jsonl`
-- deliberately does not save request headers, cookies, or passwords
+The Matrix Authorization value is not printed or persisted by reddex.
 
-While it is running, open rooms and scroll older messages in Chrome. Stop with Ctrl+C.
+The database defaults to:
 
-Useful options:
+```text
+data/reddex.db
+```
+
+Local data under `data/` is ignored by Git.
+
+## 3. Full-text search
+
+```sh
+reddex search "DuckDB"
+```
+
+Search output includes the matching text and a per-message Reddit Chat deep link.
+
+SQLite FTS5 is maintained by triggers, so inserts, edits, and deletes update the search index without rebuilding it.
+
+## Debug probe
+
+For diagnosing Reddit Chat protocol changes:
 
 ```sh
 reddex probe --list-targets
-reddex probe --endpoint http://127.0.0.1:9222
-reddex probe --output data/probe.jsonl
-reddex probe --filter reddit
+reddex probe
 ```
 
-The `data/` directory is ignored by Git. Probe captures can contain private chat contents and must not be committed.
+The probe records selected Reddit-related response bodies and WebSocket frames to:
 
-## 3. Initialize/search the SQLite database
-
-```sh
-reddex init
-reddex search "some words"
+```text
+data/probe.jsonl
 ```
 
-The database defaults to `data/reddex.db`. FTS5 is maintained by SQLite triggers, so later inserts/updates/deletes are reflected in full-text search without rebuilding the index.
+It intentionally does not persist request headers, cookies, or authorization tokens.
 
-The initial message schema keeps:
+## Stored message fields
 
-- room ID and optional room name
-- event/message ID
+- room ID
+- room name when available
+- Matrix event/message ID
 - sender
 - timestamp
-- message body
+- body
 - per-message web URL
-- original parsed JSON for forward compatibility
+- original event JSON
 
 ## Development
-
-Run the built-in tests:
 
 ```sh
 python -m unittest discover -s tests
@@ -120,6 +127,6 @@ python -m unittest discover -s tests
 
 ## Security
 
-reddex is designed around an existing browser login. It should not need your Reddit password or 2FA secret.
+`data/` can contain private Reddit Chat content. Do not commit or upload it.
 
-Local files under `data/` may contain private Reddit Chat data. Keep them out of source control and backups you do not trust.
+reddex reuses an already authenticated browser session; it does not need your Reddit password or 2FA secret.
