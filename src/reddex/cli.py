@@ -21,7 +21,7 @@ def parse_room_selection(value: str, count: int) -> list[int]:
         raise ValueError("No room selected.")
 
     selected: set[int] = set()
-    for part in re.split(r"[,\\s]+", value):
+    for part in re.split(r"[,\s]+", value):
         if not part:
             continue
         if "-" in part:
