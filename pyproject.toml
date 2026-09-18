@@ -10,6 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "websocket-client>=1.8,<2",
+]
+
+[project.optional-dependencies]
+sqlcipher = [
     "sqlcipher3>=0.6.2,<0.7",
 ]
 
