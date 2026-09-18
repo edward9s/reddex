@@ -25,6 +25,10 @@ class RoomSelectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_room_selection("6", 5)
 
+    def test_passwd_subcommand(self) -> None:
+        args = build_parser().parse_args(["passwd"])
+        self.assertEqual("passwd", args.command)
+
     def test_no_subcommand_selects_default_ui_mode(self) -> None:
         args = build_parser().parse_args([])
         self.assertIsNone(args.command)
